@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\" -ErrorAction SilentlyContinue; if \\(-not \\(Test-Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\"\\)\\) { New-Item -ItemType Directory -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\" -Force })",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\utils\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\database\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\data\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\analysis\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\trading\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\templates\")",
+      "PowerShell(python -c \"import pandas; print\\('pandas', pandas.__version__\\)\" 2>&1)",
+      "PowerShell(python -c \"import yfinance; print\\('yfinance OK'\\)\" 2>&1)",
+      "PowerShell(python -m pip install --force-reinstall pandas yfinance beautifulsoup4 lxml feedparser vaderSentiment schedule kiteconnect 2>&1)",
+      "PowerShell(tail -5)",
+      "PowerShell(python -m pip install flask 2>&1)",
+      "PowerShell(cd \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\"; Start-Process python -ArgumentList \"app.py\" -WindowStyle Hidden; Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:5000/\" -UseBasicParsing -TimeoutSec 5; \"HTTP $\\($r.StatusCode\\) — page loaded OK, $\\($r.Content.Length\\) bytes\" } catch { \"Error: $_\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:5000/api/portfolio\" -UseBasicParsing -TimeoutSec 5; \"Portfolio API: $\\($r.StatusCode\\) — $\\($r.Content\\)\" } catch { \"Error: $_\" }; try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:5000/api/status\" -UseBasicParsing -TimeoutSec 5; \"Status API: $\\($r.StatusCode\\) — $\\($r.Content\\)\" } catch { \"Error: $_\" })",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force)",
+      "Bash(python -c \"import config; print\\('WATCHLIST:', len\\(config.WATCHLIST\\), 'symbols'\\); print\\('NSE:', sum\\(1 for v in config.SYMBOL_MARKET.values\\(\\) if v=='NSE'\\)\\); print\\('NASDAQ:', sum\\(1 for v in config.SYMBOL_MARKET.values\\(\\) if v=='NASDAQ'\\)\\); print\\('MARKET_HOURS:', list\\(config.MARKET_HOURS.keys\\(\\)\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m pip install xgboost scikit-learn joblib --quiet)",
+      "Bash(python -c \"import xgboost; import sklearn; import joblib; print\\('xgboost', xgboost.__version__\\); print\\('sklearn', sklearn.__version__\\); print\\('joblib', joblib.__version__\\)\")",
+      "Bash(python -m pip install pyngrok --quiet)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "PowerShell(if \\(Test-Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\.venv\"\\) { \"found .venv\"; \\(Get-Command \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\.venv\\\\Scripts\\\\python.exe\"\\).Source } elseif \\(Test-Path \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\venv\"\\) { \"found venv\"; \\(Get-Command \"C:\\\\Users\\\\aksha\\\\Desktop\\\\stockinvestor\\\\venv\\\\Scripts\\\\python.exe\"\\).Source } else { \"no venv\" })",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

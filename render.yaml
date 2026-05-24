@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: stockbot
+    env: python
+    region: singapore       # closest free region to India
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: WEB_HOST
+        value: 0.0.0.0
+      - key: MARKET
+        value: NSE
+      - key: TRADING_MODE
+        value: simulation
+      - key: WEB_DEBUG
+        value: "false"
+      - key: WEB_SECRET
+        generateValue: true   # Render auto-generates a secure secret
+      - key: INITIAL_CAPITAL
+        value: "100000"
