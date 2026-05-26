@@ -60,13 +60,21 @@ ZERODHA_API_SECRET = os.getenv("ZERODHA_API_SECRET", "")
 ZERODHA_PRODUCT    = os.getenv("ZERODHA_PRODUCT", "CNC")
 
 # --- Simulation ---
-INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "100000"))
+INITIAL_CAPITAL = float(os.getenv("INITIAL_CAPITAL", "20000"))
+
+# --- Intraday settings ---
+INTRADAY_MODE       = True          # run intraday auto-trading during market hours
+SCAN_INTERVAL_SECS  = 300           # scan + trade every 5 minutes
+SQUARE_OFF_TIME     = (15, 15)      # (hour, minute) IST — close all positions before 3:30
+MAX_INTRADAY_LOSS   = 0.03          # stop auto-trading if daily P&L drops below -3%
+MAX_INTRADAY_POS    = 5             # max concurrent intraday positions
+INTRADAY_QTY_PCT    = 0.18          # allocate ~18% of free cash per trade
 
 # --- Risk management ---
-MAX_POSITION_PCT = 0.10    # max 10% of portfolio per position
-STOP_LOSS_PCT    = 0.05    # 5% stop-loss per position
-TAKE_PROFIT_PCT  = 0.20    # 20% take-profit per position
-MAX_POSITIONS    = 6       # maximum concurrent open positions
+MAX_POSITION_PCT = 0.18    # max 18% of portfolio per position (intraday sizing)
+STOP_LOSS_PCT    = 0.015   # 1.5% intraday stop-loss
+TAKE_PROFIT_PCT  = 0.03    # 3% intraday take-profit
+MAX_POSITIONS    = 5       # maximum concurrent open positions
 
 # --- Technical indicator parameters ---
 RSI_PERIOD     = 14

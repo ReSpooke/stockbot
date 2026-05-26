@@ -45,7 +45,7 @@ from utils.logger import log
 # ══════════════════════════════════════════════════════════════════════════════
 
 PAPER_DB      = Path(__file__).parent / "paper_trades.db"
-DEFAULT_CAP   = 100_000.0   # ₹1,00,000
+DEFAULT_CAP   = 20_000.0    # ₹20,000 intraday capital
 CURRENCY      = "₹"
 
 console = Console()

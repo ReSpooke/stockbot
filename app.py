@@ -1,5 +1,5 @@
 """
-Flask web application — StockBot dashboard.
+Flask web application — StockBot intraday trading dashboard.
 
 Run:  python app.py
 Then open: http://localhost:5000
@@ -9,19 +9,24 @@ import threading
 import time
 from datetime import datetime
 
+import pytz
 from flask import Flask, jsonify, render_template, redirect, request, url_for
 
 import config
 from database import db
 from data import stock_data, news_scraper
+from data.nse_stocks import screen_top, search as nse_search, get_name
 from analysis import signals as sig_gen
 from analysis import sentiment as sent
+from analysis.intraday import intraday_snapshot, intraday_signal
 from trading import portfolio as pf
 from trading import executor
 from utils.logger import log
 
 app = Flask(__name__)
 app.secret_key = config.WEB_SECRET
+
+_IST = pytz.timezone("Asia/Kolkata")
 
 # ── Shared analysis state (updated by background thread) ─────────────────
 
@@ -31,27 +36,52 @@ _state = {
     "last_signals":  [],
     "status_msg":    "Idle — click Run Analysis to start",
     "current_symbol":"",
-    "progress":      0,         # 0-100
+    "progress":      0,
     "total_symbols": len(config.WATCHLIST),
 }
 _lock = threading.Lock()
 
+# ── Intraday auto-trading state ───────────────────────────────────────────
+
+_intraday = {
+    "enabled":       False,     # toggled by user via /api/auto_trade
+    "last_scan":     None,      # ISO timestamp of last 5-min scan
+    "scan_results":  [],        # top stocks from last screener run
+    "daily_pnl":     0.0,       # realised P&L today (₹)
+    "trades_today":  0,
+    "squared_off":   False,     # True after EOD square-off
+    "scan_status":   "idle",    # idle | scanning | done
+}
+_intraday_lock = threading.Lock()
+
 # ── Live data caches (updated by background threads) ─────────────────────
 
-_prices_cache: dict = {}          # symbol → float
-_prices_ts:    str  = ""          # last updated timestamp
+_prices_cache: dict = {}
+_prices_ts:    str  = ""
 _prices_lock   = threading.Lock()
 
-_news_cache: dict = {}            # symbol → list[article]
+_news_cache: dict = {}
 _news_ts:    str  = ""
 _news_lock   = threading.Lock()
 
-NEWS_REFRESH_SECS   = 60          # refresh news every 60 s
-PRICES_REFRESH_SECS = 120         # refresh prices every 2 min
+NEWS_REFRESH_SECS   = 60
+PRICES_REFRESH_SECS = 120
+
+
+def _ist_now():
+    return datetime.now(tz=_IST)
+
+
+def _is_trading_hours() -> bool:
+    """True between 9:15 AM and 3:15 PM IST on weekdays."""
+    now = _ist_now()
+    if now.weekday() >= 5:   # Saturday, Sunday
+        return False
+    t = (now.hour, now.minute)
+    return (9, 15) <= t <= config.SQUARE_OFF_TIME
 
 
 def _background_news_refresh() -> None:
-    """Continuously refresh news for all watchlist symbols every 60 seconds."""
     while True:
         for sym in config.WATCHLIST:
             try:
@@ -70,7 +100,6 @@ def _background_news_refresh() -> None:
 
 
 def _background_price_refresh() -> None:
-    """Continuously refresh live prices every 2 minutes."""
     while True:
         try:
             fresh = stock_data.get_batch_prices(config.WATCHLIST)
@@ -78,20 +107,141 @@ def _background_price_refresh() -> None:
                 _prices_cache.update(fresh)
                 global _prices_ts
                 _prices_ts = datetime.now().strftime("%H:%M:%S")
-            log.debug("Price cache refreshed: %d symbols", len(fresh))
         except Exception as exc:
             log.debug("Price refresh failed: %s", exc)
         time.sleep(PRICES_REFRESH_SECS)
 
 
+def _background_intraday_scan() -> None:
+    """Every SCAN_INTERVAL_SECS: screen top stocks + auto-trade if enabled."""
+    while True:
+        if not _is_trading_hours():
+            time.sleep(30)
+            continue
+
+        with _intraday_lock:
+            enabled     = _intraday["enabled"]
+            squared_off = _intraday["squared_off"]
+            _intraday["scan_status"] = "scanning"
+
+        try:
+            top = screen_top(n=20)
+            with _intraday_lock:
+                _intraday["scan_results"] = top
+                _intraday["last_scan"]    = datetime.now().strftime("%H:%M:%S")
+                _intraday["scan_status"]  = "done"
+
+            if enabled and not squared_off:
+                _execute_intraday_trades(top)
+
+        except Exception as exc:
+            log.error("[Intraday scan] %s", exc)
+            with _intraday_lock:
+                _intraday["scan_status"] = "error"
+
+        time.sleep(config.SCAN_INTERVAL_SECS)
+
+
+def _execute_intraday_trades(top_stocks: list) -> None:
+    """Auto-buy top BUY signals and auto-sell stale positions."""
+    from trading import portfolio as pf_mod
+
+    # Check daily loss limit
+    with _intraday_lock:
+        daily_pnl = _intraday["daily_pnl"]
+    cap = config.INITIAL_CAPITAL
+    if daily_pnl < -(cap * config.MAX_INTRADAY_LOSS):
+        log.warning("[AutoTrade] Daily loss limit hit — pausing trades")
+        return
+
+    positions = pf_mod.get_positions()
+    prices_now = {}
+
+    # Evaluate each top stock for BUY
+    for item in top_stocks[:10]:
+        sym  = item["symbol"]
+        snap = intraday_snapshot(sym)
+        if not snap:
+            continue
+        prices_now[sym] = snap["price"]
+        signal = intraday_signal(snap)
+
+        if signal == "BUY" and sym not in positions:
+            if len(positions) >= config.MAX_INTRADAY_POS:
+                continue
+            price = snap["price"]
+            cash  = pf_mod.get_cash()
+            qty   = max(1, int(cash * config.INTRADAY_QTY_PCT / price))
+            r = executor.buy(sym, price, f"AutoIntraday: score={item['score']}")
+            if r.get("ok"):
+                with _intraday_lock:
+                    _intraday["trades_today"] += 1
+                log.info("[AutoTrade] BUY %s %d @ %.2f", sym, qty, price)
+
+        elif signal == "SELL" and sym in positions:
+            price = snap["price"]
+            r = executor.sell(sym, price, "AutoIntraday: SELL signal")
+            if r.get("ok"):
+                pnl = r.get("pnl", 0) or 0
+                with _intraday_lock:
+                    _intraday["daily_pnl"]   += pnl
+                    _intraday["trades_today"] += 1
+                log.info("[AutoTrade] SELL %s @ %.2f  P&L=%.2f", sym, price, pnl)
+
+    # SL / TP sweep on existing positions
+    executor.check_stop_loss_take_profit(prices_now)
+
+
+def _background_squareoff_watch() -> None:
+    """At 3:15 PM IST, close all open intraday positions."""
+    while True:
+        now = _ist_now()
+        sq  = config.SQUARE_OFF_TIME
+        if now.weekday() < 5 and (now.hour, now.minute) >= sq:
+            with _intraday_lock:
+                if not _intraday["squared_off"]:
+                    _intraday["squared_off"] = True
+                    _intraday["enabled"]     = False   # stop new trades
+
+            _do_squareoff()
+
+        # Reset squared_off flag at midnight for next day
+        if now.hour == 0 and now.minute < 2:
+            with _intraday_lock:
+                _intraday["squared_off"] = False
+                _intraday["daily_pnl"]   = 0.0
+                _intraday["trades_today"]= 0
+
+        time.sleep(30)
+
+
+def _do_squareoff() -> None:
+    """Close all open positions at market price."""
+    from trading import portfolio as pf_mod
+    positions = pf_mod.get_positions()
+    if not positions:
+        return
+    log.info("[SquareOff] Closing %d positions at 3:15 PM IST", len(positions))
+    prices = stock_data.get_batch_prices(list(positions.keys()))
+    for sym in list(positions.keys()):
+        price = prices.get(sym)
+        if price is None:
+            price = stock_data.get_current_price(sym)
+        if price:
+            r = executor.sell(sym, price, "EOD square-off 3:15 PM")
+            pnl = r.get("pnl", 0) or 0
+            with _intraday_lock:
+                _intraday["daily_pnl"] += pnl
+            log.info("[SquareOff] %s @ %.2f  P&L=%.2f", sym, price, pnl)
+
+
 def _start_background_threads() -> None:
-    for fn in (_background_news_refresh, _background_price_refresh):
-        t = threading.Thread(target=fn, daemon=True)
-        t.start()
+    for fn in (_background_news_refresh, _background_price_refresh,
+               _background_intraday_scan, _background_squareoff_watch):
+        threading.Thread(target=fn, daemon=True).start()
 
 
 def _maybe_train_ml() -> None:
-    """Train ML model in background if missing. Runs once at startup."""
     from analysis import ml_model
     if not ml_model.is_trained():
         log.info("[ML] Model not found — training on startup (takes ~2 min)…")
@@ -105,10 +255,10 @@ def _maybe_train_ml() -> None:
 def index():
     return render_template(
         "index.html",
-        watchlist  = config.WATCHLIST,
-        mode       = config.TRADING_MODE,
-        market     = config.MARKET,
-        initial_cap= config.INITIAL_CAPITAL,
+        watchlist   = config.WATCHLIST,
+        mode        = config.TRADING_MODE,
+        market      = config.MARKET,
+        initial_cap = config.INITIAL_CAPITAL,
     )
 
 
@@ -314,6 +464,78 @@ def _run_analysis_bg(symbols: list) -> None:
             _state["last_signals"]   = signals
             _state["current_symbol"] = ""
             _state["status_msg"]     = f"Done — {len(signals)} signals generated at {_state['last_run']}"
+
+
+# ── Intraday / screener APIs ───────────────────────────────────────────────
+
+@app.route("/api/screener")
+def api_screener():
+    """Return top 20 NSE stocks by intraday momentum (cached from last scan)."""
+    with _intraday_lock:
+        results    = list(_intraday["scan_results"])
+        last_scan  = _intraday["last_scan"]
+        scan_status= _intraday["scan_status"]
+    return jsonify({
+        "results":    results,
+        "last_scan":  last_scan,
+        "status":     scan_status,
+        "trading_hours": _is_trading_hours(),
+    })
+
+
+@app.route("/api/intraday/<symbol>")
+def api_intraday_symbol(symbol):
+    """Return live intraday snapshot for a single NSE symbol."""
+    snap = intraday_snapshot(symbol.upper())
+    if not snap:
+        return jsonify({"error": "No intraday data available"}), 404
+    snap["signal"] = intraday_signal(snap)
+    return jsonify(snap)
+
+
+@app.route("/api/intraday_state")
+def api_intraday_state():
+    with _intraday_lock:
+        state = dict(_intraday)
+    state["trading_hours"] = _is_trading_hours()
+    state["market_open"]   = stock_data.is_market_open("NSE")
+    state["ist_time"]      = _ist_now().strftime("%H:%M:%S")
+    return jsonify(state)
+
+
+@app.route("/api/auto_trade", methods=["POST"])
+def api_auto_trade():
+    """Toggle auto-trading on or off."""
+    data    = request.get_json() or {}
+    enabled = bool(data.get("enabled", False))
+    with _intraday_lock:
+        _intraday["enabled"] = enabled
+    log.info("[AutoTrade] %s", "ENABLED" if enabled else "DISABLED")
+    return jsonify({"ok": True, "enabled": enabled})
+
+
+@app.route("/api/search")
+def api_search():
+    """Fuzzy search NSE stocks by symbol or company name."""
+    q = request.args.get("q", "").strip()
+    if len(q) < 1:
+        return jsonify([])
+    results = nse_search(q, limit=15)
+    # Enrich with live price if cached
+    with _prices_lock:
+        cached = dict(_prices_cache)
+    for r in results:
+        r["price"] = cached.get(r["symbol"])
+    return jsonify(results)
+
+
+@app.route("/api/squareoff", methods=["POST"])
+def api_squareoff():
+    """Manually trigger EOD square-off (close all open positions)."""
+    _do_squareoff()
+    with _intraday_lock:
+        pnl = _intraday["daily_pnl"]
+    return jsonify({"ok": True, "daily_pnl": round(pnl, 2)})
 
 
 # ── Manual trade ───────────────────────────────────────────────────────────

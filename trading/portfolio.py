@@ -62,6 +62,14 @@ def summary(current_prices: dict[str, float]) -> dict:
     }
 
 
+def get_positions() -> dict:
+    return db.get_positions()
+
+
+def get_cash() -> float:
+    return db.get_cash()
+
+
 def can_open_position(symbol: str, price: float) -> tuple[bool, str]:
     """
     Check whether risk rules allow opening a new position in *symbol*.
