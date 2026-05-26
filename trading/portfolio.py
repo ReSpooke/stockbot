@@ -5,6 +5,7 @@ Provides a thin, stateless view layer so other modules can read
 portfolio info without reaching into the database directly.
 """
 
+import config
 from database import db
 from utils.logger import log
 
@@ -44,12 +45,9 @@ def summary(current_prices: dict[str, float]) -> dict:
             "pnl_pct":      round(pnl_pct, 2),
         })
 
-    total_value = cash + market_value
-    initial     = db.get_cash()  # read-only; for pnl% we need initial capital
-    # compute total pnl based on initial capital from config
-    import config
+    total_value   = cash + market_value
     total_pnl     = total_value - config.INITIAL_CAPITAL
-    total_pnl_pct = (total_pnl / config.INITIAL_CAPITAL) * 100
+    total_pnl_pct = (total_pnl / config.INITIAL_CAPITAL) * 100 if config.INITIAL_CAPITAL else 0
 
     return {
         "cash":           round(cash, 2),
@@ -75,8 +73,6 @@ def can_open_position(symbol: str, price: float) -> tuple[bool, str]:
     Check whether risk rules allow opening a new position in *symbol*.
     Returns (True, "") or (False, reason).
     """
-    import config
-
     positions = db.get_positions()
 
     if symbol in positions:
@@ -102,8 +98,6 @@ def can_open_position(symbol: str, price: float) -> tuple[bool, str]:
 
 def position_size(price: float) -> float:
     """Shares to buy given risk rules (whole shares only)."""
-    import config
-
     cash = db.get_cash()
     positions = db.get_positions()
     total_value = cash

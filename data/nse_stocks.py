@@ -7,10 +7,13 @@ search(query)   → fuzzy search by symbol or company name
 
 import numpy as np
 import pandas as pd
+import pytz
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logger import log
+
+_IST = pytz.timezone("Asia/Kolkata")
 
 # ── Nifty 500 universe ────────────────────────────────────────────────────────
 # Format: (NSE_SYMBOL, Company Name)
@@ -132,11 +135,9 @@ def _score_one(sym: str) -> dict | None:
             return None
 
         # Today's bars only
-        import pytz
-        ist = pytz.timezone("Asia/Kolkata")
-        now_ist = pd.Timestamp.now(tz=ist)
+        now_ist = pd.Timestamp.now(tz=_IST)
         today   = now_ist.date()
-        df.index = df.index.tz_convert(ist)
+        df.index = df.index.tz_convert(_IST)
         today_df = df[df.index.date == today]
         if len(today_df) < 3:
             return None
@@ -155,13 +156,51 @@ def _score_one(sym: str) -> dict | None:
         # Momentum score: price move × volume surge
         score = abs(pct_chg) * min(vol_ratio, 5)
 
+        closes = today_df["Close"]
+
+        # VWAP
+        typical_vol = ((today_df["High"] + today_df["Low"] + closes) / 3) * today_df["Volume"].replace(0, np.nan)
+        cum_vol = today_df["Volume"].replace(0, np.nan).sum()
+        vwap_val = float(typical_vol.sum() / cum_vol) if cum_vol > 0 else last_price
+        above_vwap = last_price > vwap_val
+
+        # RSI (14-period on 5-min bars)
+        delta = closes.diff()
+        avg_gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
+        avg_loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
+        rsi_val = float(100 - 100 / (1 + avg_gain / avg_loss)) if avg_loss else 50.0
+
+        # MACD histogram
+        macd_line  = closes.ewm(span=12, adjust=False).mean() - closes.ewm(span=26, adjust=False).mean()
+        macd_hist  = float((macd_line - macd_line.ewm(span=9, adjust=False).mean()).iloc[-1])
+
+        # Opening-range breakout (first 3 bars ≈ 15 min)
+        or_bars     = today_df.iloc[:3]
+        or_high     = float(or_bars["High"].max())
+        or_low      = float(or_bars["Low"].min())
+        or_breakout = "bullish" if last_price > or_high else "bearish" if last_price < or_low else "inside"
+
+        # Composite signal (same logic as intraday_signal)
+        sig = 0
+        sig += 1 if above_vwap else -1
+        sig += 2 if or_breakout == "bullish" else (-2 if or_breakout == "bearish" else 0)
+        sig += 1 if rsi_val < 35 else (-1 if rsi_val > 65 else 0)
+        sig += 1 if macd_hist > 0 else -1
+        sig += 1 if pct_chg > 1.5 else (-1 if pct_chg < -1.5 else 0)
+        signal = "BUY" if sig >= 3 else "SELL" if sig <= -3 else "HOLD"
+
         return {
-            "symbol":    sym,
-            "name":      get_name(sym),
-            "price":     round(last_price, 2),
-            "pct_chg":   round(pct_chg, 2),
-            "vol_ratio": round(vol_ratio, 1),
-            "score":     round(score, 3),
+            "symbol":      sym,
+            "name":        get_name(sym),
+            "price":       round(last_price, 2),
+            "pct_chg":     round(pct_chg, 2),
+            "vol_ratio":   round(vol_ratio, 1),
+            "score":       round(score, 3),
+            "vwap":        round(vwap_val, 2),
+            "rsi":         round(rsi_val, 1),
+            "macd_hist":   round(macd_hist, 4),
+            "or_breakout": or_breakout,
+            "signal":      signal,
         }
     except Exception:
         return None

@@ -15,7 +15,7 @@ from flask import Flask, jsonify, render_template, redirect, request, url_for
 import config
 from database import db
 from data import stock_data, news_scraper
-from data.nse_stocks import screen_top, search as nse_search, get_name
+from data.nse_stocks import screen_top, search as nse_search
 from analysis import signals as sig_gen
 from analysis import sentiment as sent
 from analysis.intraday import intraday_snapshot, intraday_signal
@@ -93,7 +93,6 @@ def _background_news_refresh() -> None:
             except Exception as exc:
                 log.debug("News refresh failed for %s: %s", sym, exc)
         with _news_lock:
-            global _news_ts
             _news_ts = datetime.now().strftime("%H:%M:%S")
         log.info("News cache refreshed for %d symbols", len(config.WATCHLIST))
         time.sleep(NEWS_REFRESH_SECS)
@@ -105,7 +104,6 @@ def _background_price_refresh() -> None:
             fresh = stock_data.get_batch_prices(config.WATCHLIST)
             with _prices_lock:
                 _prices_cache.update(fresh)
-                global _prices_ts
                 _prices_ts = datetime.now().strftime("%H:%M:%S")
         except Exception as exc:
             log.debug("Price refresh failed: %s", exc)
@@ -144,20 +142,16 @@ def _background_intraday_scan() -> None:
 
 def _execute_intraday_trades(top_stocks: list) -> None:
     """Auto-buy top BUY signals and auto-sell stale positions."""
-    from trading import portfolio as pf_mod
-
-    # Check daily loss limit
     with _intraday_lock:
         daily_pnl = _intraday["daily_pnl"]
-    cap = config.INITIAL_CAPITAL
-    if daily_pnl < -(cap * config.MAX_INTRADAY_LOSS):
+
+    if daily_pnl < -(config.INITIAL_CAPITAL * config.MAX_INTRADAY_LOSS):
         log.warning("[AutoTrade] Daily loss limit hit — pausing trades")
         return
 
-    positions = pf_mod.get_positions()
+    positions  = pf.get_positions()
     prices_now = {}
 
-    # Evaluate each top stock for BUY
     for item in top_stocks[:10]:
         sym  = item["symbol"]
         snap = intraday_snapshot(sym)
@@ -170,7 +164,7 @@ def _execute_intraday_trades(top_stocks: list) -> None:
             if len(positions) >= config.MAX_INTRADAY_POS:
                 continue
             price = snap["price"]
-            cash  = pf_mod.get_cash()
+            cash  = pf.get_cash()
             qty   = max(1, int(cash * config.INTRADAY_QTY_PCT / price))
             r = executor.buy(sym, price, f"AutoIntraday: score={item['score']}")
             if r.get("ok"):
@@ -188,7 +182,6 @@ def _execute_intraday_trades(top_stocks: list) -> None:
                     _intraday["trades_today"] += 1
                 log.info("[AutoTrade] SELL %s @ %.2f  P&L=%.2f", sym, price, pnl)
 
-    # SL / TP sweep on existing positions
     executor.check_stop_loss_take_profit(prices_now)
 
 
@@ -217,8 +210,7 @@ def _background_squareoff_watch() -> None:
 
 def _do_squareoff() -> None:
     """Close all open positions at market price."""
-    from trading import portfolio as pf_mod
-    positions = pf_mod.get_positions()
+    positions = pf.get_positions()
     if not positions:
         return
     log.info("[SquareOff] Closing %d positions at 3:15 PM IST", len(positions))

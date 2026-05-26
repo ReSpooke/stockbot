@@ -208,7 +208,16 @@ def get_recent_signals(limit: int = 30) -> list[dict]:
         rows = con.execute(
             "SELECT * FROM signals ORDER BY generated_at DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        row = dict(r)
+        # reasons is stored as a JSON-encoded list; decode it for callers
+        try:
+            row["reasons"] = json.loads(row["reasons"]) if row.get("reasons") else []
+        except (json.JSONDecodeError, TypeError):
+            row["reasons"] = []
+        result.append(row)
+    return result
 
 
 # ---------------------------------------------------------------------------
