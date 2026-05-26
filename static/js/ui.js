@@ -10,7 +10,7 @@ function fmt(n, decimals = 2) {
 }
 
 function rupee(n) {
-  return '&#8377;' + fmt(n);
+  return '₹' + fmt(n);
 }
 
 function signClass(n) {
@@ -61,7 +61,7 @@ function renderMarketBadges(data) {
 function renderWatchlist(items, activeSymbol) {
   document.getElementById('watchlist').innerHTML = items.map(item => {
     const price = item.price ? item.price.toFixed(2) : '—';
-    const cur   = item.currency === '₹' ? '&#8377;' : (item.currency || '&#8377;');
+    const cur   = item.currency === '₹' ? '₹' : (item.currency || '₹');
     const active = activeSymbol === item.symbol ? ' active' : '';
     return `<div class="wl-item${active}" onclick="onSymbolClick('${item.symbol}')">
       <div class="wl-sym">${item.symbol}<span class="wl-exch">${item.market || ''}</span></div>

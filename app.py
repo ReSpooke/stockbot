@@ -5,8 +5,10 @@ Run:  python app.py
 Then open: http://localhost:5000
 """
 
+import os
 import threading
 import time
+import urllib.request
 from datetime import datetime
 
 import pytz
@@ -72,10 +74,19 @@ def _ist_now():
     return datetime.now(tz=_IST)
 
 
-def _is_trading_hours() -> bool:
-    """True between 9:15 AM and 3:15 PM IST on weekdays."""
+def _nse_market_open() -> bool:
+    """True during actual NSE session: 9:15 AM – 3:30 PM IST, Mon–Fri."""
     now = _ist_now()
-    if now.weekday() >= 5:   # Saturday, Sunday
+    if now.weekday() >= 5:
+        return False
+    t = (now.hour, now.minute)
+    return (9, 15) <= t <= (15, 30)
+
+
+def _is_trading_hours() -> bool:
+    """True when the bot may scan and place trades: 9:15 AM – 3:15 PM IST."""
+    now = _ist_now()
+    if now.weekday() >= 5:
         return False
     t = (now.hour, now.minute)
     return (9, 15) <= t <= config.SQUARE_OFF_TIME
@@ -227,9 +238,37 @@ def _do_squareoff() -> None:
             log.info("[SquareOff] %s @ %.2f  P&L=%.2f", sym, price, pnl)
 
 
+def _background_keepalive() -> None:
+    """
+    Ping our own health endpoint every 10 min so Render's free tier doesn't
+    spin down the server during market hours.  No-op when not on Render.
+    """
+    url = os.getenv("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not url:
+        return
+    log.info("[Keepalive] Active — pinging %s every 10 min", url)
+    while True:
+        time.sleep(600)
+        try:
+            urllib.request.urlopen(f"{url}/api/market_status", timeout=15)
+            log.debug("[Keepalive] OK")
+        except Exception as exc:
+            log.debug("[Keepalive] %s", exc)
+
+
+def _restore_auto_state() -> None:
+    """Re-apply the auto-trade preference saved in the DB after a restart."""
+    saved = db.get_setting("auto_trade_enabled", "0")
+    if saved == "1":
+        with _intraday_lock:
+            _intraday["enabled"] = True
+        log.info("[AutoTrade] Restored: ENABLED (from DB)")
+
+
 def _start_background_threads() -> None:
     for fn in (_background_news_refresh, _background_price_refresh,
-               _background_intraday_scan, _background_squareoff_watch):
+               _background_intraday_scan, _background_squareoff_watch,
+               _background_keepalive):
         threading.Thread(target=fn, daemon=True).start()
 
 
@@ -489,19 +528,20 @@ def api_intraday_symbol(symbol):
 def api_intraday_state():
     with _intraday_lock:
         state = dict(_intraday)
-    state["trading_hours"] = _is_trading_hours()
-    state["market_open"]   = stock_data.is_market_open("NSE")
+    state["trading_hours"] = _is_trading_hours()   # bot may place trades
+    state["market_open"]   = _nse_market_open()    # actual NSE session
     state["ist_time"]      = _ist_now().strftime("%H:%M:%S")
     return jsonify(state)
 
 
 @app.route("/api/auto_trade", methods=["POST"])
 def api_auto_trade():
-    """Toggle auto-trading on or off."""
+    """Toggle auto-trading on or off. Persists across server restarts."""
     data    = request.get_json() or {}
     enabled = bool(data.get("enabled", False))
     with _intraday_lock:
         _intraday["enabled"] = enabled
+    db.set_setting("auto_trade_enabled", "1" if enabled else "0")
     log.info("[AutoTrade] %s", "ENABLED" if enabled else "DISABLED")
     return jsonify({"ok": True, "enabled": enabled})
 
@@ -558,6 +598,7 @@ def api_trade():
 
 def create_app():
     db.init_db()
+    _restore_auto_state()
     _start_background_threads()
     threading.Thread(target=_maybe_train_ml, daemon=True).start()
     return app
@@ -565,6 +606,7 @@ def create_app():
 
 if __name__ == "__main__":
     db.init_db()
+    _restore_auto_state()
     _start_background_threads()
     threading.Thread(target=_maybe_train_ml, daemon=True).start()
     log.info("Starting StockBot web server at http://%s:%d", config.WEB_HOST, config.WEB_PORT)

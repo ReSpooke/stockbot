@@ -88,6 +88,11 @@ def init_db() -> None:
             published_at TEXT,
             fetched_at   TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
         """)
 
     # seed portfolio row if missing
@@ -256,6 +261,25 @@ def get_recent_news(symbol: str | None = None, limit: int = 40) -> list[dict]:
                 "SELECT * FROM news ORDER BY fetched_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Settings (simple key-value store for persisting app state)
+# ---------------------------------------------------------------------------
+
+def get_setting(key: str, default: str = "") -> str:
+    with _conn() as con:
+        row = con.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
 
 
 # ---------------------------------------------------------------------------

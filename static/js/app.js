@@ -168,7 +168,7 @@ async function manualTrade(side) {
 
   const price = activeSnap.price;
   const label = side.toUpperCase();
-  if (!confirm(`${label} ${activeSymbol} @ &#8377;${price.toFixed(2)}?`)) return;
+  if (!confirm(`${label} ${activeSymbol} @ ₹${price.toFixed(2)}?`)) return;
 
   try {
     const result = await API.trade(activeSymbol, side, price);
@@ -185,7 +185,7 @@ async function squareOff() {
   if (!confirm('Close ALL open positions now?')) return;
   try {
     const result = await API.squareOff();
-    toast(`Square-off done. Daily P&L: &#8377;${(result.daily_pnl || 0).toFixed(2)}`, 'ok');
+    toast(`Square-off done. Daily P&L: ₹${(result.daily_pnl || 0).toFixed(2)}`, 'ok');
     loadPortfolio();
     loadTrades();
   } catch (e) {
