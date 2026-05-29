@@ -33,8 +33,14 @@ Seven scoring factors (identical for buy and sell side):
 SELL_MIN_NEW   = -4    # min score to exit (no position held)
 SELL_MIN_HELD  = -3    # lower threshold when we hold the stock (exit faster)
 
+# Backtests set this to a fixed int so results aren't affected by live trade
+# logs. None = use the live learning module.
+BUY_MIN_OVERRIDE = None
+
 def _buy_min() -> int:
-    """Dynamic BUY threshold adjusted by the learning module."""
+    """BUY threshold: fixed override (backtest) or learning-module value (live)."""
+    if BUY_MIN_OVERRIDE is not None:
+        return BUY_MIN_OVERRIDE
     try:
         from analysis.learning import get_buy_min
         return get_buy_min()

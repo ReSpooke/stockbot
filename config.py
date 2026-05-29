@@ -70,6 +70,13 @@ MAX_INTRADAY_LOSS   = 0.03          # stop auto-trading if daily P&L drops below
 MAX_INTRADAY_POS    = 5             # max concurrent intraday positions
 INTRADAY_QTY_PCT    = 0.18          # allocate ~18% of free cash per trade
 
+# --- Strategy improvements (validated via backtest.py) ---
+# No re-entry: once a stock is sold at a loss today, don't buy it again today.
+NO_REENTRY_AFTER_LOSS = True
+# Weak-position exit: after this time (IST), cut any position still below VWAP
+# instead of holding it into the forced 3:15 square-off.
+WEAK_EXIT_TIME        = (14, 0)     # 2:00 PM IST
+
 # --- Risk management ---
 MAX_POSITION_PCT = 0.18    # max 18% of portfolio per position (intraday sizing)
 STOP_LOSS_PCT    = 0.015   # 1.5% intraday stop-loss

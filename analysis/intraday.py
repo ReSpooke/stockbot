@@ -10,6 +10,7 @@ import pytz
 import yfinance as yf
 
 from utils.logger import log
+from analysis.indicators import compute_snapshot
 
 _IST = pytz.timezone("Asia/Kolkata")
 
@@ -93,54 +94,30 @@ def intraday_snapshot(symbol: str) -> dict:
         if len(today_df) < 3:
             return {}
 
+        prev_close = float(prev_df["Close"].iloc[-1]) if not prev_df.empty else None
+        prev_day_vol = None
         if not prev_df.empty:
-            prev_close = float(prev_df["Close"].iloc[-1])
-        else:
-            prev_close = float(today_df["Open"].iloc[0])
-        last_price = float(today_df["Close"].iloc[-1])
-        pct_chg    = round((last_price - prev_close) / prev_close * 100, 2)
+            prev_dates   = sorted(set(prev_df.index.date))
+            prev_day_vol = float(prev_df[prev_df.index.date == prev_dates[-1]]["Volume"].sum())
 
-        avg_vol   = float(prev_df["Volume"].mean()) if not prev_df.empty else float(today_df["Volume"].mean())
-        today_vol = float(today_df["Volume"].sum())
-        bars_pct  = len(today_df) / 75
-        vol_ratio = round(today_vol / max(avg_vol * bars_pct, 1), 1)
+        # Shared indicator math (identical to screener + backtest)
+        snap = compute_snapshot(today_df, prev_close, prev_day_vol)
+        if snap is None:
+            return {}
 
-        vwap_val  = vwap(today_df)
-        or_info   = opening_range(today_df, minutes=15)
-        rsi_val   = _rsi(today_df["Close"])
+        # Add detail-view-only fields (OR levels, MACD line/signal, volume)
         macd_info = _macd(today_df["Close"])
-
-        above_vwap  = bool(last_price > vwap_val) if not np.isnan(vwap_val) else None
-        or_breakout = None
-        if or_info:
-            if last_price > or_info["or_high"]:
-                or_breakout = "bullish"
-            elif last_price < or_info["or_low"]:
-                or_breakout = "bearish"
-            else:
-                or_breakout = "inside"
-
-        score = round(abs(pct_chg) * min(vol_ratio, 5), 3)
-
-        return {
+        or_info   = opening_range(today_df, minutes=15)
+        snap.update({
             "symbol":      symbol,
-            "price":       round(last_price, 2),
-            "prev_close":  round(prev_close, 2),
-            "pct_chg":     pct_chg,
-            "volume":      int(today_vol),
-            "vol_ratio":   vol_ratio,
-            "vwap":        vwap_val,
-            "above_vwap":  above_vwap,
-            "rsi":         rsi_val,
+            "prev_close":  round(prev_close, 2) if prev_close else None,
+            "volume":      int(today_df["Volume"].sum()),
             "macd":        macd_info["macd"],
             "macd_signal": macd_info["signal"],
-            "macd_hist":   macd_info["hist"],
             "or_high":     or_info.get("or_high"),
             "or_low":      or_info.get("or_low"),
-            "or_breakout": or_breakout,
-            "score":       score,
-            "bars":        len(today_df),
-        }
+        })
+        return snap
     except Exception as e:
         log.debug("[intraday] %s error: %s", symbol, e)
         return {}

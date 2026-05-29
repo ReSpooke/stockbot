@@ -12,6 +12,7 @@ import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils.logger import log
+from analysis.indicators import compute_snapshot
 
 _IST = pytz.timezone("Asia/Kolkata")
 
@@ -126,14 +127,13 @@ def search(query: str, limit: int = 20) -> list[dict]:
 # ── Intraday screener ─────────────────────────────────────────────────────────
 
 def _score_one(sym: str) -> dict | None:
-    """Fetch today's 5-min data for sym and compute a quick momentum score."""
+    """Fetch today's 5-min data for sym and compute its intraday snapshot."""
     try:
         yf_sym = sym + ".NS"
         df = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
         if df is None or df.empty:
             return None
 
-        # Today's bars only
         now_ist = pd.Timestamp.now(tz=_IST)
         today   = now_ist.date()
         df.index = df.index.tz_convert(_IST)
@@ -142,75 +142,22 @@ def _score_one(sym: str) -> dict | None:
             return None
 
         prev_df    = df[df.index.date < today]
-        # Use last yesterday close; fall back to today's open bar if no prev data
+        prev_close = float(prev_df["Close"].iloc[-1]) if not prev_df.empty else None
+
+        # Previous full trading day's total volume (for a sane volume ratio)
+        prev_day_vol = None
         if not prev_df.empty:
-            prev_close = float(prev_df["Close"].iloc[-1])
-        else:
-            prev_close = float(today_df["Open"].iloc[0])
-        last_price = float(today_df["Close"].iloc[-1])
-        pct_chg    = (last_price - prev_close) / prev_close * 100
+            prev_dates = sorted(set(prev_df.index.date))
+            last_prev  = prev_dates[-1]
+            prev_day_vol = float(prev_df[prev_df.index.date == last_prev]["Volume"].sum())
 
-        # Volume ratio vs yesterday average (full-day)
-        avg_vol = float(prev_df["Volume"].mean()) if not prev_df.empty else float(today_df["Volume"].mean())
-        today_vol = float(today_df["Volume"].sum())
-        # Scale: full day = ~75 bars of 5min; today_df may have fewer bars
-        bars_pct  = len(today_df) / 75
-        vol_ratio = (today_vol / max(avg_vol * bars_pct, 1))
+        snap = compute_snapshot(today_df, prev_close, prev_day_vol)
+        if snap is None:
+            return None
 
-        # Momentum score: price move × volume surge
-        score = abs(pct_chg) * min(vol_ratio, 5)
-
-        closes = today_df["Close"]
-
-        # VWAP
-        typical_vol = ((today_df["High"] + today_df["Low"] + closes) / 3) * today_df["Volume"].replace(0, np.nan)
-        cum_vol = today_df["Volume"].replace(0, np.nan).sum()
-        vwap_val = float(typical_vol.sum() / cum_vol) if cum_vol > 0 else last_price
-        above_vwap = last_price > vwap_val
-
-        # RSI — use min(14, half of available bars) so it works early in the day
-        rsi_period = max(3, min(14, len(closes) // 2))
-        delta      = closes.diff()
-        avg_gain   = delta.clip(lower=0).rolling(rsi_period).mean().iloc[-1]
-        avg_loss   = (-delta.clip(upper=0)).rolling(rsi_period).mean().iloc[-1]
-        if pd.isna(avg_gain) or pd.isna(avg_loss) or avg_loss == 0:
-            rsi_val = 50.0
-        else:
-            rsi_val = float(100 - 100 / (1 + avg_gain / avg_loss))
-
-        # MACD histogram
-        macd_line  = closes.ewm(span=12, adjust=False).mean() - closes.ewm(span=26, adjust=False).mean()
-        macd_hist  = float((macd_line - macd_line.ewm(span=9, adjust=False).mean()).iloc[-1])
-
-        # Opening-range breakout (first 3 bars ≈ 15 min)
-        or_bars     = today_df.iloc[:3]
-        or_high     = float(or_bars["High"].max())
-        or_low      = float(or_bars["Low"].min())
-        or_breakout = "bullish" if last_price > or_high else "bearish" if last_price < or_low else "inside"
-
-        # Composite signal (same logic as intraday_signal)
-        sig = 0
-        sig += 1 if above_vwap else -1
-        sig += 2 if or_breakout == "bullish" else (-2 if or_breakout == "bearish" else 0)
-        sig += 1 if rsi_val < 35 else (-1 if rsi_val > 65 else 0)
-        sig += 1 if macd_hist > 0 else -1
-        sig += 1 if pct_chg > 1.5 else (-1 if pct_chg < -1.5 else 0)
-        signal = "BUY" if sig >= 3 else "SELL" if sig <= -3 else "HOLD"
-
-        return {
-            "symbol":      sym,
-            "name":        get_name(sym),
-            "price":       round(last_price, 2),
-            "pct_chg":     round(pct_chg, 2),
-            "vol_ratio":   round(vol_ratio, 1),
-            "score":       round(score, 3),
-            "vwap":        round(vwap_val, 2),
-            "rsi":         round(rsi_val, 1),
-            "macd_hist":   round(macd_hist, 4),
-            "or_breakout": or_breakout,
-            "above_vwap":  above_vwap,
-            "signal":      signal,
-        }
+        snap["symbol"] = sym
+        snap["name"]   = get_name(sym)
+        return snap
     except Exception:
         return None
 
