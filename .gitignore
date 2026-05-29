@@ -26,6 +26,9 @@ ml_model_meta.json
 # Logs
 *.log
 stockbot.log
+logs/*.jsonl
+logs/*.json
+!logs/.gitkeep
 
 # OS
 .DS_Store

@@ -22,6 +22,8 @@ from analysis import signals as sig_gen
 from analysis import sentiment as sent
 from analysis.intraday import intraday_snapshot, intraday_signal
 from analysis.decision import evaluate as decide
+from analysis import learning
+from utils.trade_logger import log_trade, log_cycle, log_daily_summary
 from trading import portfolio as pf
 from trading import executor
 from utils.logger import log
@@ -243,6 +245,10 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
                 with _intraday_lock:
                     _intraday["daily_pnl"]   += pnl
                     _intraday["trades_today"] += 1
+                log_trade("SELL", sym, float(positions[sym]["quantity"]), price,
+                          pnl=pnl, reason=reason_str, score=dec["score"],
+                          confidence=dec["confidence"], exit_type=dec.get("exit_type"))
+                learning.invalidate_cache()
                 log.info("[Bot] SELL %s @ %.2f  %s  P&L=%.2f",
                          sym, price, dec.get("exit_type", "signal"), pnl)
 
@@ -269,14 +275,15 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
             entry["reasons"].append("Skipped — insufficient cash")
             continue
 
-        r = executor.buy(sym, price,
-                         f"Bot BUY score={dec['score']} {dec['confidence']} | " +
-                         "; ".join(dec["reasons"][:2]))
+        reason_str = f"Bot BUY score={dec['score']} {dec['confidence']} | " + "; ".join(dec["reasons"][:2])
+        r = executor.buy(sym, price, reason_str)
         if r.get("ok"):
             cash -= cost
             entry["traded"] = True
             with _intraday_lock:
                 _intraday["trades_today"] += 1
+            log_trade("BUY", sym, qty, price, reason=reason_str,
+                      score=dec["score"], confidence=dec["confidence"])
             log.info("[Bot] BUY %s %d @ %.2f  score=%d  %s",
                      sym, qty, price, dec["score"], dec["confidence"])
 
@@ -284,6 +291,14 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
     executor.check_stop_loss_take_profit(prices_now)
 
     _log(cycle_log)
+    log_cycle(cycle_log)
+
+    # Daily summary log (overwritten each cycle)
+    with _intraday_lock:
+        dpnl   = _intraday["daily_pnl"]
+        dtrades= _intraday["trades_today"]
+    log_daily_summary(dpnl, dtrades, pf.get_cash(), len(pf.get_positions()))
+
     return enriched
 
 
@@ -709,6 +724,124 @@ def api_squareoff():
     with _intraday_lock:
         pnl = _intraday["daily_pnl"]
     return jsonify({"ok": True, "daily_pnl": round(pnl, 2)})
+
+
+# ── Chart data ────────────────────────────────────────────────────────────
+
+@app.route("/api/chart/<symbol>")
+def api_chart(symbol):
+    """
+    Return OHLCV data + VWAP + bot decision markers for a stock chart.
+
+    Query params:
+        period   = 1d | 5d  (default: 1d)
+        interval = 5m | 15m | 1h (default: 5m)
+    """
+    import pytz, numpy as np
+    sym     = symbol.upper()
+    period  = request.args.get("period",   "1d")
+    interval= request.args.get("interval", "5m")
+
+    try:
+        import yfinance as yf
+        import pandas as pd
+        _ist = pytz.timezone("Asia/Kolkata")
+
+        df = yf.Ticker(sym + ".NS").history(
+            period=period if period != "1d" else "5d",
+            interval=interval, auto_adjust=True
+        )
+        if df is None or df.empty:
+            return jsonify({"error": "No data"}), 404
+
+        df.index = df.index.tz_convert(_ist)
+        if period == "1d":
+            today = pd.Timestamp.now(tz=_ist).date()
+            df    = df[df.index.date == today]
+        if df.empty:
+            return jsonify({"error": "No intraday data (market may be closed)"}), 404
+
+        # Candlestick series (Unix timestamp seconds for TradingView)
+        candles = [
+            {"time":   int(ts.timestamp()),
+             "open":   round(float(r["Open"]),  2),
+             "high":   round(float(r["High"]),  2),
+             "low":    round(float(r["Low"]),   2),
+             "close":  round(float(r["Close"]), 2)}
+            for ts, r in df.iterrows()
+        ]
+
+        # Volume series
+        volume = [
+            {"time":  int(ts.timestamp()),
+             "value": int(r["Volume"]),
+             "color": "#26a69a" if r["Close"] >= r["Open"] else "#ef5350"}
+            for ts, r in df.iterrows()
+        ]
+
+        # VWAP
+        typical = (df["High"] + df["Low"] + df["Close"]) / 3
+        vol     = df["Volume"].replace(0, float("nan"))
+        vwap_s  = (typical * vol).cumsum() / vol.cumsum()
+        vwap_line = [
+            {"time": int(ts.timestamp()), "value": round(float(v), 2)}
+            for ts, v in vwap_s.items() if not np.isnan(v)
+        ]
+
+        # Bot decision markers (from in-memory decision log)
+        with _decision_lock:
+            log_snap = list(_decision_log)
+
+        today_str = pd.Timestamp.now(tz=_ist).strftime("%H")
+        markers = []
+        for entry in log_snap:
+            if entry.get("symbol") != sym:
+                continue
+            action = entry.get("action", "HOLD")
+            if action not in ("BUY", "SELL") or not entry.get("traded"):
+                continue
+            # Parse time from log entry "HH:MM:SS"
+            t_str = entry.get("time", "")
+            try:
+                import datetime as dt_mod
+                today_date = pd.Timestamp.now(tz=_ist).date()
+                t_obj = dt_mod.datetime.strptime(t_str, "%H:%M:%S").replace(
+                    year=today_date.year, month=today_date.month, day=today_date.day
+                )
+                t_obj = _ist.localize(t_obj)
+                markers.append({
+                    "time":     int(t_obj.timestamp()),
+                    "position": "belowBar" if action == "BUY" else "aboveBar",
+                    "color":    "#26a69a" if action == "BUY" else "#ef5350",
+                    "shape":    "arrowUp" if action == "BUY" else "arrowDown",
+                    "text":     f"{action} {entry.get('score', '')}",
+                })
+            except Exception:
+                pass
+
+        return jsonify({
+            "symbol":  sym,
+            "candles": candles,
+            "volume":  volume,
+            "vwap":    vwap_line,
+            "markers": markers,
+        })
+
+    except Exception as exc:
+        log.error("[Chart] %s %s: %s", sym, period, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+# ── Bot learning / performance ─────────────────────────────────────────────
+
+@app.route("/api/bot_performance")
+def api_bot_performance():
+    """Return learning stats: win rate, signal accuracy, current threshold."""
+    try:
+        perf = learning.get_performance()
+        return jsonify(perf)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
 
 
 # ── Manual trade ───────────────────────────────────────────────────────────

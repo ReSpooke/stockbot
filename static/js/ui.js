@@ -403,3 +403,48 @@ function renderBotLog(entries) {
     </tr>`;
   }).join('');
 }
+
+/* ── Bot performance / learning ──────────────────────────────────────────── */
+
+function renderBotPerformance(data) {
+  const el = document.getElementById('bot-perf-panel');
+  if (!el) return;
+
+  if (!data || data.n_trades < 3) {
+    el.innerHTML = `<div class="perf-msg">${data ? data.message : 'Loading…'}</div>`;
+    return;
+  }
+
+  const wr    = data.win_rate != null ? (data.win_rate * 100).toFixed(0) + '%' : '—';
+  const wrCls = data.win_rate >= 0.5 ? 'pos' : 'neg';
+  const bm    = data.buy_min || 5;
+  const bmCol = bm <= 4 ? 'var(--green)' : bm >= 7 ? 'var(--red)' : 'var(--yellow)';
+
+  const sigRows = Object.entries(data.signal_stats || {}).map(([sig, s]) => {
+    const pct = (s.accuracy * 100).toFixed(0);
+    const bc  = s.accuracy >= 0.6 ? '#26a69a' : s.accuracy >= 0.4 ? '#ffb74d' : '#ef5350';
+    return `<div class="sig-row">
+      <span class="sig-name">${sig}</span>
+      <div class="sig-bar-wrap"><div class="sig-bar" style="width:${pct}%;background:${bc}"></div></div>
+      <span class="sig-pct" style="color:${bc}">${pct}% (${s.wins}/${s.total})</span>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="perf-stats">
+      <div class="perf-card">
+        <div class="perf-label">Win Rate (${data.n_trades} trades)</div>
+        <div class="perf-value ${wrCls}">${wr}</div>
+      </div>
+      <div class="perf-card">
+        <div class="perf-label">Entry Threshold</div>
+        <div class="perf-value" style="color:${bmCol}">${bm} / 13</div>
+      </div>
+      <div class="perf-card wide">
+        <div class="perf-label">What bot learned</div>
+        <div style="font-size:12px;color:var(--text);margin-top:4px">${data.message || ''}</div>
+      </div>
+    </div>
+    ${sigRows ? `<div class="sig-section"><div class="section-title" style="margin-bottom:8px">Signal Accuracy</div>${sigRows}</div>` : ''}
+  `;
+}

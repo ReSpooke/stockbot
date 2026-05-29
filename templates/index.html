@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>StockBot — Intraday Trading</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  <!-- TradingView Lightweight Charts (free, open source) -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 
@@ -41,6 +43,7 @@
     <div id="tabs">
       <div class="tab active" onclick="switchTab('screener')">Screener</div>
       <div class="tab"        onclick="switchTab('botlog')">Bot Log</div>
+      <div class="tab"        onclick="switchTab('learning')">Learning</div>
       <div class="tab"        onclick="switchTab('portfolio')">Portfolio</div>
       <div class="tab"        onclick="switchTab('trades')">Trades</div>
       <div class="tab"        onclick="switchTab('news')">News</div>
@@ -64,6 +67,11 @@
             <button class="action-btn btn-buy"  onclick="manualTrade('buy')">BUY</button>
             <button class="action-btn btn-sell" onclick="manualTrade('sell')">SELL</button>
             <button class="action-btn btn-sq"   onclick="squareOff()" style="float:right">Square Off All</button>
+          </div>
+          <!-- Candlestick chart (loads when stock is selected) -->
+          <div id="stock-chart" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px"></div>
+          <div style="font-size:10px;color:var(--dim);margin-top:4px">
+            Candlestick · VWAP (dashed orange) · ▲ Bot BUY · ▼ Bot SELL
           </div>
         </div>
 
@@ -119,6 +127,21 @@
           </thead>
           <tbody id="bot-log-body"></tbody>
         </table>
+      </div>
+
+      <!-- ── LEARNING ── -->
+      <div id="tab-learning" class="tab-pane">
+        <div class="page-desc">
+          The bot learns from its own trade history.
+          After each closed trade it measures which signal combinations produced wins or losses,
+          then automatically adjusts its <strong>entry threshold</strong> (how strict it is before buying).
+          <strong>Win rate ≥ 65%</strong> → lowers threshold (trade more aggressively).
+          <strong>Win rate &lt; 35%</strong> → raises threshold (near-stop conservative mode).
+          <strong>Signal accuracy bars</strong> show which indicators are actually working today.
+        </div>
+        <div id="bot-perf-panel">
+          <div class="perf-msg">Loading performance data…</div>
+        </div>
       </div>
 
       <!-- ── PORTFOLIO ── -->
@@ -196,6 +219,7 @@
 </script>
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ui.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chart.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

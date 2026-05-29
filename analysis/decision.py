@@ -30,9 +30,16 @@ Seven scoring factors (identical for buy and sell side):
   7. Time-of-day               (penalty / hard-block)
 """
 
-BUY_MIN        =  5    # min score to enter new position
 SELL_MIN_NEW   = -4    # min score to exit (no position held)
 SELL_MIN_HELD  = -3    # lower threshold when we hold the stock (exit faster)
+
+def _buy_min() -> int:
+    """Dynamic BUY threshold adjusted by the learning module."""
+    try:
+        from analysis.learning import get_buy_min
+        return get_buy_min()
+    except Exception:
+        return 5
 
 
 def evaluate(
@@ -173,8 +180,9 @@ def evaluate(
 
     # ── Decision ─────────────────────────────────────────────────────────
     sell_min = SELL_MIN_HELD if holding else SELL_MIN_NEW
+    buy_min  = _buy_min()
 
-    if score >= BUY_MIN and not holding:
+    if score >= buy_min and not holding:
         return _result("BUY", score, reasons, None)
     if score <= sell_min:
         return _result("SELL", score, reasons, "signal")

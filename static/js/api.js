@@ -32,6 +32,8 @@ const API = (() => {
     search:         (q)     => _get('/api/search?q=' + encodeURIComponent(q)),
     botLog:         (n)     => _get('/api/bot_log?limit=' + (n || 100)),
     positionsLive:  ()      => _get('/api/positions_live'),
+    chart:          (sym, p) => _get(`/api/chart/${encodeURIComponent(sym)}?period=${p||'1d'}`),
+    botPerformance: ()      => _get('/api/bot_performance'),
 
     squareOff:     ()        => _post('/api/squareoff', {}),
     trade:         (symbol, side, price) => _post('/api/trade', { symbol, side, price }),

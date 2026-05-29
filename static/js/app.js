@@ -18,7 +18,7 @@ renderClock();
 
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 
-const TAB_NAMES = ['screener', 'botlog', 'portfolio', 'trades', 'news'];
+const TAB_NAMES = ['screener', 'botlog', 'learning', 'portfolio', 'trades', 'news'];
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((el, i) =>
@@ -33,6 +33,7 @@ function switchTab(name) {
   if (name === 'trades')    loadTrades();
   if (name === 'news')      loadNews();
   if (name === 'botlog')    loadBotLog();
+  if (name === 'learning')  loadBotPerformance();
 }
 
 /* ── Market status ───────────────────────────────────────────────────────── */
@@ -87,6 +88,16 @@ async function loadIntradayDetail(sym) {
     activeSnap = null;
     showIntradayError(sym);
   }
+  // Load chart for this symbol (non-blocking)
+  if (typeof ChartModule !== 'undefined') {
+    ChartModule.init('stock-chart', sym);
+  }
+}
+
+/* ── Bot performance ─────────────────────────────────────────────────────── */
+
+async function loadBotPerformance() {
+  try { renderBotPerformance(await API.botPerformance()); } catch (e) {}
 }
 
 /* ── Screener ────────────────────────────────────────────────────────────── */
@@ -211,6 +222,7 @@ setInterval(loadScreener, 10_000);
 
 // Bot log auto-refreshes when the tab is visible
 setInterval(() => {
-  if (document.getElementById('tab-botlog').classList.contains('active')) loadBotLog();
-  if (document.getElementById('tab-news').classList.contains('active'))   loadNews();
+  if (document.getElementById('tab-botlog').classList.contains('active'))   loadBotLog();
+  if (document.getElementById('tab-learning').classList.contains('active')) loadBotPerformance();
+  if (document.getElementById('tab-news').classList.contains('active'))     loadNews();
 }, 15_000);
