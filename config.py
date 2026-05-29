@@ -133,7 +133,7 @@ LOG_LEVEL = "INFO"
 # --- Web app ---
 # On Render (RENDER env var is set automatically), bind to all interfaces.
 # Locally defaults to 127.0.0.1 (safe).
-WEB_HOST  = os.getenv("WEB_HOST", "0.0.0.0" if os.getenv("RENDER") else "127.0.0.1")
+WEB_HOST  = os.getenv("WEB_HOST", "0.0.0.0")
 # PORT is set by Render automatically; WEB_PORT is the local fallback
 WEB_PORT  = int(os.getenv("PORT", os.getenv("WEB_PORT", "5000")))
 WEB_DEBUG = os.getenv("WEB_DEBUG", "false").lower() == "true"
