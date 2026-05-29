@@ -151,14 +151,17 @@ def _background_intraday_scan() -> None:
         try:
             all_results = screen_all()           # scan every stock in UNIVERSE
             elapsed = time.monotonic() - t0
-            with _intraday_lock:
-                _intraday["scan_results"] = all_results
-                _intraday["last_scan"]    = datetime.now().strftime("%H:%M:%S")
-                _intraday["scan_status"]  = "done"
             log.info("[Bot] Scan done in %.1fs — %d stocks", elapsed, len(all_results))
 
             if not squared_off:
-                _run_decision_cycle(all_results, now.hour, now.minute)
+                enriched = _run_decision_cycle(all_results, now.hour, now.minute)
+            else:
+                enriched = all_results
+
+            with _intraday_lock:
+                _intraday["scan_results"] = enriched
+                _intraday["last_scan"]    = datetime.now().strftime("%H:%M:%S")
+                _intraday["scan_status"]  = "done"
 
         except Exception as exc:
             log.error("[Bot] Scan error: %s", exc)
@@ -168,10 +171,11 @@ def _background_intraday_scan() -> None:
         time.sleep(config.SCAN_INTERVAL_SECS)
 
 
-def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> None:
+def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> list:
     """
     Run the decision engine on every scanned stock.
     Execute trades for BUY/SELL decisions; log every evaluation.
+    Returns enriched results (scan data + bot decision scores merged).
     """
     with _intraday_lock:
         daily_pnl = _intraday["daily_pnl"]
@@ -182,21 +186,36 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> No
                 "action": "PAUSED", "score": 0, "confidence": "—", "price": 0,
                 "pct_chg": 0, "reasons": [f"Daily loss limit ₹{daily_pnl:.0f}"],
                 "traded": False, "pnl": None}])
-        return
+        return all_results
 
     positions  = pf.get_positions()
     cash       = pf.get_cash()
     prices_now = {r["symbol"]: r["price"] for r in all_results if r.get("price")}
     cycle_log  = []
-    buy_queue  = []   # (decision, item) — executed after SELLs, sorted by score
+    buy_queue  = []
+    enriched   = []   # all_results merged with bot decision fields
 
     for item in all_results:
         sym   = item.get("symbol")
         price = item.get("price")
         if not sym or not price:
+            enriched.append(item)
             continue
 
-        dec = decide(item, ist_hour, ist_minute)
+        pos_data  = positions.get(sym)
+        is_held   = pos_data is not None
+        avg_cost  = float(pos_data["avg_cost"]) if pos_data else None
+
+        dec = decide(item, ist_hour, ist_minute, holding=is_held, avg_cost=avg_cost)
+
+        # Merge bot decision into the item for the screener table
+        enriched.append({**item,
+                         "bot_score":      dec["score"],
+                         "bot_signal":     dec["action"],
+                         "bot_confidence": dec["confidence"],
+                         "bot_exit_type":  dec.get("exit_type"),
+                         "holding":        is_held})
+
         entry = {
             "time":       _ist_now().strftime("%H:%M:%S"),
             "symbol":     sym,
@@ -206,14 +225,14 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> No
             "price":      price,
             "pct_chg":    item.get("pct_chg", 0),
             "reasons":    dec["reasons"],
+            "exit_type":  dec.get("exit_type"),
             "traded":     False,
             "pnl":        None,
         }
 
-        if dec["action"] == "SELL" and sym in positions:
-            r = executor.sell(sym, price,
-                              f"Bot SELL score={dec['score']} | " +
-                              "; ".join(dec["reasons"][:2]))
+        if dec["action"] == "SELL" and is_held:
+            reason_str = (dec.get("exit_type") or "signal") + " | " + "; ".join(dec["reasons"][:2])
+            r = executor.sell(sym, price, f"Bot SELL {reason_str}")
             if r.get("ok"):
                 pnl = r.get("pnl", 0) or 0
                 entry["traded"] = True
@@ -221,10 +240,10 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> No
                 with _intraday_lock:
                     _intraday["daily_pnl"]   += pnl
                     _intraday["trades_today"] += 1
-                log.info("[Bot] SELL %s @ %.2f  score=%d  P&L=%.2f",
-                         sym, price, dec["score"], pnl)
+                log.info("[Bot] SELL %s @ %.2f  %s  P&L=%.2f",
+                         sym, price, dec.get("exit_type", "signal"), pnl)
 
-        elif dec["action"] == "BUY" and sym not in positions:
+        elif dec["action"] == "BUY" and not is_held:
             buy_queue.append((dec, item, entry))
 
         cycle_log.append(entry)
@@ -258,10 +277,11 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> No
             log.info("[Bot] BUY %s %d @ %.2f  score=%d  %s",
                      sym, qty, price, dec["score"], dec["confidence"])
 
-    # SL/TP sweep — no extra API calls needed
+    # SL/TP sweep — uses prices already fetched by the screener
     executor.check_stop_loss_take_profit(prices_now)
 
     _log(cycle_log)
+    return enriched
 
 
 def _background_squareoff_watch() -> None:

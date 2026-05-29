@@ -124,26 +124,38 @@ function renderScreener(data) {
   }
 
   tbody.innerHTML = items.map((s, i) => {
+    // ── Actual market data ──────────────────────────────────────────────
     const pct  = s.pct_chg || 0;
     const pc   = signClass(pct);
-    const sig  = s.signal || 'HOLD';
     const vwap = s.vwap ? rupee(s.vwap) : '—';
     const rsi  = s.rsi  ? fmt(s.rsi, 1) : '—';
     const orb  = s.or_breakout || '—';
-    const abv  = s.above_vwap === true ? '↑' : s.above_vwap === false ? '↓' : '—';
-    const abvC = s.above_vwap === true ? 'pos' : s.above_vwap === false ? 'neg' : 'neu';
-    return `<tr onclick="onSymbolClick('${s.symbol}')" style="cursor:pointer">
-      <td style="color:var(--dim)">${i + 1}</td>
+    const abv  = s.above_vwap === true ? ' ↑' : s.above_vwap === false ? ' ↓' : '';
+    const abvC = s.above_vwap === true ? 'pos' : s.above_vwap === false ? 'neg' : '';
+
+    // ── Bot analysis (from decision engine, may be absent pre-first cycle) ──
+    const botScore = s.bot_score != null ? s.bot_score : null;
+    const botSig   = s.bot_signal || s.signal || 'HOLD';
+    const botConf  = s.bot_confidence || '—';
+    const botScoreHtml = botScore != null
+      ? `<span style="color:${botScore >= 5 ? 'var(--green)' : botScore <= -3 ? 'var(--red)' : 'var(--dim)'};font-weight:700">${botScore >= 0 ? '+' : ''}${botScore}</span>`
+      : '<span style="color:var(--dim)">—</span>';
+    const confCls = botConf === 'HIGH' ? 'pos' : botConf === 'MEDIUM' ? '' : 'neu';
+
+    const rowCls = s.holding ? 'row-held' : '';
+
+    return `<tr class="${rowCls}" onclick="onSymbolClick('${s.symbol}')" style="cursor:pointer">
+      <td style="color:var(--dim)">${i + 1}${s.holding ? ' ●' : ''}</td>
       <td><strong>${s.symbol}</strong></td>
-      <td style="color:var(--dim);font-size:12px">${s.name || ''}</td>
       <td class="r">${rupee(s.price)}</td>
       <td class="r ${pc}">${signStr(pct)}${fmt(pct)}%</td>
       <td class="r">${fmt(s.vol_ratio || 0, 1)}×</td>
-      <td class="r">${vwap} <span class="${abvC}">${abv}</span></td>
+      <td class="r">${vwap}<span class="${abvC}">${abv}</span></td>
       <td class="r">${rsi}</td>
       <td>${orb}</td>
-      <td><span class="badge ${badgeClass(sig)}">${sig}</span></td>
-      <td class="r" style="color:var(--dim);font-size:11px">${s.score ? fmt(s.score, 2) : '—'}</td>
+      <td class="r">${botScoreHtml}</td>
+      <td class="r ${confCls}" style="font-size:11px">${botConf}</td>
+      <td><span class="badge ${badgeClass(botSig)}">${botSig}</span></td>
     </tr>`;
   }).join('');
 }
@@ -329,21 +341,29 @@ function renderBotLog(entries) {
   }
   el.innerHTML = entries.map(e => {
     const ac  = e.action || 'HOLD';
-    const ac2 = e.traded ? ac : (ac === 'BUY' || ac === 'SELL') ? 'SKIP' : ac;
-    const cls = ac === 'BUY' ? 'side-buy' : ac === 'SELL' ? 'side-sell' : 'neu';
+    // Show label: traded = actual action; not traded but signal = SKIP
+    const label = e.traded
+      ? (ac === 'SELL' && e.exit_type ? ac + ' (' + e.exit_type.replace('_', ' ') + ')' : ac)
+      : (ac === 'BUY' || ac === 'SELL') ? ac + ' (skip)' : ac;
+    const cls = ac === 'BUY'
+      ? (e.traded ? 'side-buy' : 'neu')
+      : ac === 'SELL'
+        ? (e.traded ? 'side-sell' : 'neu')
+        : 'neu';
     const pnlHtml = e.pnl != null
       ? `<span class="${signClass(e.pnl)}">${signStr(e.pnl)}₹${Math.abs(e.pnl).toFixed(0)}</span>`
       : '—';
-    const tradeIcon = e.traded ? '✓' : '';
+    const scoreColor = e.score >= 5 ? 'var(--green)' : e.score <= -3 ? 'var(--red)' : 'var(--dim)';
     const reasons = (e.reasons || []).join(' · ');
+    const tradedDot = e.traded ? ' <span style="color:var(--green)">✓</span>' : '';
     return `<tr>
       <td style="color:var(--dim);font-size:11px">${e.time || ''}</td>
-      <td class="${cls}" style="font-weight:700">${ac2}</td>
+      <td class="${cls}" style="font-size:12px;font-weight:700">${label}${tradedDot}</td>
       <td><strong>${e.symbol || '—'}</strong></td>
       <td class="r">${e.price ? rupee(e.price) : '—'}</td>
-      <td class="r" style="color:${e.score >= 5 ? 'var(--green)' : e.score <= -4 ? 'var(--red)' : 'var(--dim)'}">${e.score >= 0 ? '+' : ''}${e.score}</td>
+      <td class="r" style="color:${scoreColor};font-weight:700">${e.score >= 0 ? '+' : ''}${e.score}</td>
       <td class="r">${pnlHtml}</td>
-      <td style="color:var(--dim);font-size:11px;max-width:300px">${reasons}</td>
+      <td style="color:var(--dim);font-size:11px">${reasons}</td>
     </tr>`;
   }).join('');
 }

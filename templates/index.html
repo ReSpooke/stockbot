@@ -19,14 +19,13 @@
     <span class="num" id="tb-pnl">—</span>
     <span class="pv" id="tb-pos">0 positions</span>
   </div>
-  <!-- Bot always-on status chip (no toggle) -->
   <span id="bot-status" class="bot-idle">BOT OFFLINE</span>
 </div>
 
 <!-- ═══ LAYOUT ════════════════════════════════════════════════════════════ -->
 <div id="layout">
 
-  <!-- Left panel: watchlist + search -->
+  <!-- Left panel -->
   <div id="left-panel">
     <div id="search-box">
       <input id="search-input" type="text" placeholder="Search all NSE stocks…"
@@ -39,8 +38,6 @@
 
   <!-- Main area -->
   <div id="main">
-
-    <!-- Tab bar -->
     <div id="tabs">
       <div class="tab active" onclick="switchTab('screener')">Screener</div>
       <div class="tab"        onclick="switchTab('botlog')">Bot Log</div>
@@ -53,8 +50,13 @@
 
       <!-- ── SCREENER ── -->
       <div id="tab-screener" class="tab-pane active">
+        <div class="page-desc">
+          All NSE stocks scanned every 5 min and ranked by intraday activity.
+          <strong>Left columns</strong> = live market data.&nbsp;
+          <strong>Right columns (Bot Score, Confidence, Decision)</strong> = what the bot calculated — scores ≥5 trigger a BUY, ≤−3 trigger a SELL for held positions.
+          Click any row to see full intraday detail and manually trade.
+        </div>
 
-        <!-- Intraday detail card (shown when a stock is selected) -->
         <div id="intraday-detail">
           <h3 id="id-sym-title">Stock Detail</h3>
           <div class="id-grid" id="id-grid"></div>
@@ -66,7 +68,7 @@
         </div>
 
         <div id="screener-bar">
-          <span class="section-title" style="margin:0">All NSE Stocks — Ranked by Momentum</span>
+          <span class="section-title" style="margin:0">All NSE Stocks</span>
           <span id="screener-status" class="neu">Loading…</span>
           <button id="scan-btn" onclick="triggerScan()">Refresh</button>
         </div>
@@ -74,17 +76,21 @@
         <table class="data-table">
           <thead>
             <tr>
+              <th colspan="7" class="col-group-actual">— Live Market Data —</th>
+              <th colspan="4" class="col-group-bot">— Bot Analysis —</th>
+            </tr>
+            <tr>
               <th>#</th>
               <th>Symbol</th>
-              <th>Company</th>
               <th class="r">Price</th>
               <th class="r">Chg%</th>
               <th class="r">Vol</th>
-              <th class="r">VWAP ↑↓</th>
+              <th class="r">VWAP</th>
               <th class="r">RSI</th>
               <th>OR Break</th>
-              <th>Signal</th>
               <th class="r">Score</th>
+              <th>Confidence</th>
+              <th>Decision</th>
             </tr>
           </thead>
           <tbody id="screener-body"></tbody>
@@ -93,8 +99,11 @@
 
       <!-- ── BOT LOG ── -->
       <div id="tab-botlog" class="tab-pane">
-        <div class="section-title" style="margin-bottom:12px">
-          Bot Decision Log — every stock evaluated each cycle
+        <div class="page-desc">
+          The bot's thinking — every stock evaluated each 5-min cycle.
+          <strong>Score</strong> is the sum of 7 factors (OR breakout, VWAP, RSI, MACD, Volume, Momentum, Time).
+          <strong>✓ rows</strong> = a trade was actually executed.
+          If a BUY shows "Skipped" in Reasoning, it means the bot liked it but already held max positions or had insufficient cash.
         </div>
         <table class="data-table">
           <thead>
@@ -105,7 +114,7 @@
               <th class="r">Price</th>
               <th class="r">Score</th>
               <th class="r">P&amp;L</th>
-              <th>Reasoning</th>
+              <th>Reasoning (why the bot decided this)</th>
             </tr>
           </thead>
           <tbody id="bot-log-body"></tbody>
@@ -114,6 +123,11 @@
 
       <!-- ── PORTFOLIO ── -->
       <div id="tab-portfolio" class="tab-pane">
+        <div class="page-desc">
+          Your virtual ₹{{ "%.0f"|format(initial_cap) }} portfolio.
+          The bot buys with 12–20% of available cash per trade.
+          Positions are automatically closed at <strong>1.5% stop-loss</strong>, <strong>3% take-profit</strong>, or at <strong>3:15 PM</strong> (EOD square-off) — whichever comes first.
+        </div>
         <div class="pf-cards" id="pf-cards"></div>
         <div class="section-title">Open Positions</div>
         <table class="data-table">
@@ -121,11 +135,11 @@
             <tr>
               <th>Symbol</th>
               <th class="r">Qty</th>
-              <th class="r">Avg Cost</th>
-              <th class="r">LTP</th>
-              <th class="r">Market Value</th>
+              <th class="r">Entry Price</th>
+              <th class="r">Current Price</th>
+              <th class="r">Value</th>
               <th class="r">Unrealised P&amp;L</th>
-              <th class="r">P&amp;L%</th>
+              <th class="r">P&amp;L %</th>
             </tr>
           </thead>
           <tbody id="positions-body"></tbody>
@@ -134,7 +148,11 @@
 
       <!-- ── TRADES ── -->
       <div id="tab-trades" class="tab-pane">
-        <div class="section-title">Trade History</div>
+        <div class="page-desc">
+          All trades the bot executed today.
+          <strong>P&amp;L</strong> is shown for closed (SELL) trades only — it is the profit or loss relative to the entry price.
+          The bot targets +3% profit and cuts at −1.5% loss. After 2:30 PM it exits profitable positions early to avoid overnight risk.
+        </div>
         <table class="data-table">
           <thead>
             <tr>
@@ -142,9 +160,9 @@
               <th>Side</th>
               <th class="r">Qty</th>
               <th class="r">Price</th>
-              <th class="r">Total</th>
-              <th class="r">P&amp;L</th>
-              <th>Reason</th>
+              <th class="r">Total Value</th>
+              <th class="r">Realised P&amp;L</th>
+              <th>Why Bot Acted</th>
               <th>Time</th>
             </tr>
           </thead>
@@ -154,7 +172,12 @@
 
       <!-- ── NEWS ── -->
       <div id="tab-news" class="tab-pane">
-        <div class="section-title">Latest Market News</div>
+        <div class="page-desc">
+          Latest news for your watchlist stocks.
+          <strong>Green ▲</strong> = positive sentiment (may support a BUY).
+          <strong>Red ▼</strong> = negative sentiment (may reinforce a SELL).
+          Sentiment scores range from −1 (very negative) to +1 (very positive).
+        </div>
         <div id="news-list"></div>
       </div>
 
@@ -167,11 +190,8 @@
 <script>
   const INITIAL_CAP = {{ initial_cap }};
 </script>
-
-<!-- Modules: api → ui → app (order matters) -->
 <script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/ui.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-
 </body>
 </html>
