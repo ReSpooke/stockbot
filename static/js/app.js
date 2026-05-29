@@ -18,7 +18,7 @@ renderClock();
 
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 
-const TAB_NAMES = ['screener', 'portfolio', 'trades', 'news', 'botlog'];
+const TAB_NAMES = ['screener', 'botlog', 'portfolio', 'trades', 'news'];
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((el, i) =>
