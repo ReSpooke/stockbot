@@ -115,6 +115,13 @@ async function loadPortfolio() {
   } catch (e) {}
 }
 
+/* Fast 5-second poll: refreshes position rows + top bar from cached prices */
+async function refreshPositions() {
+  try {
+    renderPositionsLive(await API.positionsLive());
+  } catch (e) {}
+}
+
 /* ── Trades ──────────────────────────────────────────────────────────────── */
 
 async function loadTrades() {
@@ -186,16 +193,18 @@ async function init() {
     loadWatchlist(),
     loadScreener(),
     loadPortfolio(),
+    refreshPositions(),
     syncBotStatus(),
   ]);
 }
 
 init();
 
-setInterval(loadMarketStatus, 30_000);
-setInterval(loadWatchlist,    15_000);
-setInterval(loadPortfolio,    20_000);
-setInterval(syncBotStatus,    30_000);
+setInterval(loadMarketStatus,  30_000);
+setInterval(loadWatchlist,     15_000);
+setInterval(loadPortfolio,     30_000);   // full portfolio (with fresh yfinance fetch)
+setInterval(refreshPositions,   5_000);   // live P&L from cache every 5s
+setInterval(syncBotStatus,     30_000);
 
 // Poll screener every 10s (background scan is ~30s; this catches updates quickly)
 setInterval(loadScreener, 10_000);

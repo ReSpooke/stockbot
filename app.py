@@ -125,7 +125,10 @@ def _background_news_refresh() -> None:
 def _background_price_refresh() -> None:
     while True:
         try:
-            fresh = stock_data.get_batch_prices(config.WATCHLIST)
+            # Always include open positions so portfolio P&L stays live
+            positions = db.get_positions()
+            syms = list(set(config.WATCHLIST) | set(positions.keys()))
+            fresh = stock_data.get_batch_prices(syms)
             with _prices_lock:
                 _prices_cache.update(fresh)
                 _prices_ts = datetime.now().strftime("%H:%M:%S")
@@ -407,11 +410,60 @@ def api_status():
 
 @app.route("/api/portfolio")
 def api_portfolio():
-    prices = stock_data.get_batch_prices(config.WATCHLIST)
-    summary = pf.summary(prices)
-    # attach currency symbol
-    summary["currency"] = "₹" if config.MARKET == "NSE" else "$"
+    # Always fetch live prices for open positions (bot may hold stocks outside watchlist)
+    positions = db.get_positions()
+    syms = list(set(config.WATCHLIST) | set(positions.keys()))
+    # Use price cache first, only fetch what's missing
+    with _prices_lock:
+        cached = dict(_prices_cache)
+    missing = [s for s in syms if s not in cached or cached[s] is None]
+    if missing:
+        fresh = stock_data.get_batch_prices(missing)
+        cached.update(fresh)
+        with _prices_lock:
+            _prices_cache.update(fresh)
+    summary = pf.summary(cached)
+    summary["currency"] = "₹"
     return jsonify(summary)
+
+
+@app.route("/api/positions_live")
+def api_positions_live():
+    """
+    Lightweight endpoint — returns open positions with live prices from cache.
+    Used for fast polling (every 5s) without triggering new yfinance calls.
+    """
+    positions = db.get_positions()
+    if not positions:
+        return jsonify({"positions": [], "cash": db.get_cash(), "updated_at": _prices_ts})
+
+    with _prices_lock:
+        cached = dict(_prices_cache)
+
+    pos_list = []
+    for sym, pos in positions.items():
+        qty      = float(pos["quantity"])
+        avg_cost = float(pos["avg_cost"])
+        price    = cached.get(sym) or avg_cost
+        mv       = price * qty
+        pnl      = (price - avg_cost) * qty
+        pnl_pct  = (price - avg_cost) / avg_cost * 100 if avg_cost else 0
+        pos_list.append({
+            "symbol":         sym,
+            "quantity":       qty,
+            "avg_cost":       round(avg_cost, 2),
+            "current_price":  round(price, 2),
+            "market_value":   round(mv, 2),
+            "unrealised_pnl": round(pnl, 2),
+            "pnl_pct":        round(pnl_pct, 2),
+            "stale":          sym not in cached,   # True = price not yet refreshed
+        })
+
+    return jsonify({
+        "positions":  pos_list,
+        "cash":       round(db.get_cash(), 2),
+        "updated_at": _prices_ts,
+    })
 
 
 @app.route("/api/signals")

@@ -239,22 +239,58 @@ function renderPortfolioTab(d, initialCap) {
 
   const pos   = d.positions || [];
   const tbody = document.getElementById('positions-body');
-  if (!pos.length) {
+  _renderPositionRows(pos, tbody);
+}
+
+/* Shared renderer used by both full portfolio and live-positions fast-poll */
+function _renderPositionRows(pos, tbody) {
+  if (!pos || !pos.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="color:var(--dim);text-align:center;padding:20px">No open positions</td></tr>';
     return;
   }
   tbody.innerHTML = pos.map(p => {
     const pn = p.unrealised_pnl || 0;
+    const pc = signClass(pn);
+    const sg = signStr(pn);
+    // Stale = price not yet refreshed from yfinance, show dim
+    const priceHtml = p.stale
+      ? `<span style="color:var(--dim)">${rupee(p.current_price)} ⟳</span>`
+      : `<span class="${pc}">${rupee(p.current_price)}</span>`;
     return `<tr>
       <td><strong>${p.symbol}</strong></td>
       <td class="r">${p.quantity}</td>
-      <td class="r">${rupee(p.avg_cost)}</td>
-      <td class="r">${rupee(p.current_price)}</td>
+      <td class="r" style="color:var(--dim)">${rupee(p.avg_cost)}</td>
+      <td class="r">${priceHtml}</td>
       <td class="r">${rupee(p.market_value)}</td>
-      <td class="r ${signClass(pn)}">${signStr(pn)}${rupee(Math.abs(pn))}</td>
-      <td class="r ${signClass(pn)}">${signStr(pn)}${fmt(p.pnl_pct)}%</td>
+      <td class="r ${pc}" style="font-weight:700">${sg}${rupee(Math.abs(pn))}</td>
+      <td class="r ${pc}">${sg}${fmt(p.pnl_pct)}%</td>
     </tr>`;
   }).join('');
+}
+
+/* Fast live-positions update — only refreshes the table rows, not the cards */
+function renderPositionsLive(data) {
+  const tbody = document.getElementById('positions-body');
+  if (tbody) _renderPositionRows(data.positions || [], tbody);
+
+  // Update top bar numbers from live positions
+  const positions = data.positions || [];
+  const mv  = positions.reduce((s, p) => s + (p.market_value || 0), 0);
+  const pnl = positions.reduce((s, p) => s + (p.unrealised_pnl || 0), 0);
+  const total = (data.cash || 0) + mv;
+
+  document.getElementById('tb-total').innerHTML = rupee(total);
+  document.getElementById('tb-pos').textContent =
+    `${positions.length} position${positions.length === 1 ? '' : 's'}`;
+  const pnlEl = document.getElementById('tb-pnl');
+  pnlEl.className = 'num ' + signClass(pnl);
+  pnlEl.innerHTML = `${signStr(pnl)}${rupee(Math.abs(pnl))}`;
+
+  // Also refresh the timestamp hint
+  if (data.updated_at) {
+    const hint = document.getElementById('prices-ts');
+    if (hint) hint.textContent = 'Prices at ' + data.updated_at;
+  }
 }
 
 /* ── Trades ──────────────────────────────────────────────────────────────── */
