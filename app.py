@@ -193,12 +193,13 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
                 "traded": False, "pnl": None}])
         return all_results
 
-    positions  = pf.get_positions()
-    cash       = pf.get_cash()
-    prices_now = {r["symbol"]: r["price"] for r in all_results if r.get("price")}
-    cycle_log  = []
-    buy_queue  = []
-    enriched   = []   # all_results merged with bot decision fields
+    positions    = pf.get_positions()
+    cash         = pf.get_cash()
+    prices_now   = {r["symbol"]: r["price"] for r in all_results if r.get("price")}
+    cycle_log    = []
+    buy_queue    = []
+    enriched     = []
+    already_sold = set()   # symbols sold this cycle — skip in SL/TP to avoid double-sell
 
     for item in all_results:
         sym   = item.get("symbol")
@@ -242,6 +243,7 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
                 pnl = r.get("pnl", 0) or 0
                 entry["traded"] = True
                 entry["pnl"]    = round(pnl, 2)
+                already_sold.add(sym)      # prevent SL/TP double-sell this cycle
                 with _intraday_lock:
                     _intraday["daily_pnl"]   += pnl
                     _intraday["trades_today"] += 1
@@ -287,8 +289,9 @@ def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> li
             log.info("[Bot] BUY %s %d @ %.2f  score=%d  %s",
                      sym, qty, price, dec["score"], dec["confidence"])
 
-    # SL/TP sweep — uses prices already fetched by the screener
-    executor.check_stop_loss_take_profit(prices_now)
+    # SL/TP sweep — skip any symbol already sold by decision engine this cycle
+    sltp_prices = {k: v for k, v in prices_now.items() if k not in already_sold}
+    executor.check_stop_loss_take_profit(sltp_prices)
 
     _log(cycle_log)
     log_cycle(cycle_log)

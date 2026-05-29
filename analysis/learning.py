@@ -37,6 +37,26 @@ _DEFAULT_BUY_MIN = 5
 _TRACKED_SIGNALS = ["OR breakout", "Above VWAP", "Below VWAP", "RSI", "MACD", "Volume"]
 
 
+def _load_trades() -> list:
+    """Load trades from log files, falling back to DB if files are empty."""
+    trades = read_recent_trades(days=3)
+    if trades:
+        return trades
+    # Log files empty (e.g. fresh deploy) — fall back to DB
+    try:
+        from database import db as _db
+        rows = _db.get_trades(100)
+        return [
+            {"side": r.get("side", "").upper(),
+             "pnl":    r.get("pnl"),
+             "symbol": r.get("symbol", ""),
+             "reason": r.get("reason", "")}
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
 def get_performance() -> dict:
     """
     Analyse recent closed trades and return:
@@ -46,7 +66,7 @@ def get_performance() -> dict:
         signal_stats : per-signal accuracy dict
         message      : human-readable summary of what the bot learned
     """
-    trades = read_recent_trades(days=3)
+    trades = _load_trades()
     sells  = [t for t in trades if t.get("side") == "SELL" and t.get("pnl") is not None]
 
     if len(sells) < 3:
@@ -55,7 +75,8 @@ def get_performance() -> dict:
             "win_rate":     None,
             "n_trades":     len(sells),
             "signal_stats": {},
-            "message":      f"Not enough data yet ({len(sells)} closed trades). Using default threshold.",
+            "message":      f"Only {len(sells)} closed trade(s) so far. Need at least 3 to calibrate. "
+                            f"Using default entry threshold of {_DEFAULT_BUY_MIN}.",
         }
 
     wins     = [t for t in sells if (t.get("pnl") or 0) > 0]

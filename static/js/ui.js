@@ -302,13 +302,27 @@ function renderTrades(trades) {
     return;
   }
   tbody.innerHTML = trades.map(t => {
-    // backend field is 'pnl' (only for sells)
     const pnl     = t.pnl ?? null;
     const pnlHtml = pnl != null
       ? `<span class="${signClass(pnl)}">${signStr(pnl)}${rupee(Math.abs(pnl))}</span>`
       : '—';
-    const side    = (t.side || '').toUpperCase();
-    const qty     = t.quantity || 0;
+    const side = (t.side || '').toUpperCase();
+    const qty  = t.quantity || 0;
+
+    // Show IST time: executed_at is UTC "YYYY-MM-DD HH:MM:SS" → convert to IST +05:30
+    let timeHtml = '—';
+    if (t.executed_at) {
+      try {
+        const utc = new Date(t.executed_at.replace(' ', 'T') + 'Z');
+        const ist = new Date(utc.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const hh  = String(ist.getHours()).padStart(2, '0');
+        const mm  = String(ist.getMinutes()).padStart(2, '0');
+        const ss  = String(ist.getSeconds()).padStart(2, '0');
+        const dd  = ist.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' });
+        timeHtml  = `<span style="font-weight:600">${hh}:${mm}:${ss}</span><br><span style="font-size:10px;color:var(--dim)">${dd} IST</span>`;
+      } catch(e) { timeHtml = t.executed_at.slice(11, 19); }
+    }
+
     return `<tr>
       <td><strong>${t.symbol}</strong></td>
       <td class="${side === 'BUY' ? 'side-buy' : 'side-sell'}">${side}</td>
@@ -317,7 +331,7 @@ function renderTrades(trades) {
       <td class="r">${rupee(qty * t.price)}</td>
       <td class="r">${pnlHtml}</td>
       <td style="color:var(--dim);font-size:11px;max-width:130px;overflow:hidden;white-space:nowrap">${t.reason || '—'}</td>
-      <td style="color:var(--dim);font-size:11px">${(t.executed_at || '').slice(0, 16)}</td>
+      <td style="color:var(--dim);font-size:11px;line-height:1.4">${timeHtml}</td>
     </tr>`;
   }).join('');
 }
@@ -410,8 +424,31 @@ function renderBotPerformance(data) {
   const el = document.getElementById('bot-perf-panel');
   if (!el) return;
 
+  // Always show the current threshold and message, even with few trades
+  const bm0    = data ? (data.buy_min || 5) : 5;
+  const bm0Col = bm0 <= 4 ? 'var(--green)' : bm0 >= 7 ? 'var(--red)' : 'var(--yellow)';
+  const msg0   = data ? (data.message || 'Calculating…') : 'Loading…';
+
   if (!data || data.n_trades < 3) {
-    el.innerHTML = `<div class="perf-msg">${data ? data.message : 'Loading…'}</div>`;
+    el.innerHTML = `
+      <div class="perf-stats">
+        <div class="perf-card">
+          <div class="perf-label">Entry Threshold</div>
+          <div class="perf-value" style="color:${bm0Col}">${bm0} / 13</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Closed Trades</div>
+          <div class="perf-value" style="color:var(--dim)">${data ? data.n_trades : 0}</div>
+        </div>
+        <div class="perf-card wide">
+          <div class="perf-label">Status</div>
+          <div style="font-size:12px;color:var(--text);margin-top:4px">${msg0}</div>
+        </div>
+      </div>
+      <div class="perf-msg" style="margin-top:0;font-size:11px">
+        Signal accuracy bars will appear here once the bot has made at least 3 trades today.
+        The bot adjusts its entry threshold automatically based on its win/loss rate.
+      </div>`;
     return;
   }
 
