@@ -158,11 +158,123 @@ def build_dataset(symbols, horizon: int, target: float):
     return X, y, np.array(day_keys)
 
 
+CACHE_LONG = Path(__file__).parent / "backtest_cache" / "hourly"
+CACHE_LONG.mkdir(parents=True, exist_ok=True)
+
+
+def _fetch_long(sym: str, period: str, interval: str):
+    """Fetch + cache long-history bars (e.g. 2y of 1h) for one symbol."""
+    import yfinance as yf
+    import pytz
+    cache = CACHE_LONG / f"{sym}_{interval}.pkl"
+    if cache.exists() and (time.time() - cache.stat().st_mtime) < 86400:
+        try:
+            return pickle.load(open(cache, "rb"))
+        except Exception:
+            pass
+    try:
+        df = yf.Ticker(sym + ".NS").history(period=period, interval=interval, auto_adjust=True)
+        if df is None or df.empty:
+            return None
+        df.index = df.index.tz_convert(pytz.timezone("Asia/Kolkata"))
+        pickle.dump(df, open(cache, "wb"))
+        return df
+    except Exception:
+        return None
+
+
+def build_dataset_long(symbols, horizon: int, target: float, period: str, interval: str):
+    """
+    Build features from long history (e.g. 2 years of hourly bars).
+    Indicators are computed CONTINUOUSLY across the whole series (hourly bars
+    are too sparse for daily-reset RSI/MACD), with daily-reset VWAP + OR.
+    """
+    rows, labels, day_keys = [], [], []
+    _log(f"Downloading {period} {interval} history for {len(symbols)} stocks "
+         f"(cached after first run)…")
+
+    loaded = 0
+    for n, sym in enumerate(symbols, 1):
+        df = _fetch_long(sym, period, interval)
+        if df is None or len(df) < 200:
+            continue
+        loaded += 1
+
+        c = df["Close"]
+        # Continuous indicators across the full 2-year series
+        ema12 = c.ewm(span=12, adjust=False).mean()
+        ema26 = c.ewm(span=26, adjust=False).mean()
+        macd  = ema12 - ema26
+        macd_hist = (macd - macd.ewm(span=9, adjust=False).mean()).values
+        delta = c.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rsi   = (100 - 100 / (1 + gain / loss.replace(0, np.nan))).fillna(50).values
+        vol_avg = df["Volume"].rolling(20).mean().fillna(df["Volume"].mean()).values
+
+        closes = c.values
+        highs, lows, vols = df["High"].values, df["Low"].values, df["Volume"].values
+        dates = df.index.date
+        idxs  = df.index
+
+        # Daily-reset VWAP + opening range, computed per day
+        vwap = np.zeros(len(df)); or_high = np.full(len(df), np.nan); or_low = np.full(len(df), np.nan)
+        prev_close_arr = np.zeros(len(df)); bar_idx_arr = np.zeros(len(df))
+        cur_day = None; cum_tpv = 0.0; cum_v = 0.0; day_oh = -1e9; day_ol = 1e9; bi = 0
+        last_close_prev_day = closes[0]
+        for j in range(len(df)):
+            if dates[j] != cur_day:
+                if cur_day is not None:
+                    last_close_prev_day = closes[j-1]
+                cur_day = dates[j]; cum_tpv = 0.0; cum_v = 0.0
+                day_oh = highs[j]; day_ol = lows[j]; bi = 0
+            typ = (highs[j] + lows[j] + closes[j]) / 3
+            cum_tpv += typ * vols[j]; cum_v += vols[j]
+            vwap[j] = cum_tpv / cum_v if cum_v > 0 else closes[j]
+            day_oh = max(day_oh, highs[j]); day_ol = min(day_ol, lows[j])
+            or_high[j] = day_oh; or_low[j] = day_ol
+            prev_close_arr[j] = last_close_prev_day
+            bar_idx_arr[j] = bi; bi += 1
+
+        for i in range(26, len(df) - horizon):
+            price = closes[i]
+            if price <= 0:
+                continue
+            future = closes[i + horizon]
+            label  = 1 if (future - price) / price > target else 0
+            pc = prev_close_arr[i] or price
+            t  = idxs[i]
+            rows.append([
+                (price - pc) / pc * 100,                     # pct_chg
+                rsi[i],                                      # rsi
+                macd_hist[i],                                # macd_hist
+                vols[i] / max(vol_avg[i], 1),                # vol_ratio
+                (price - vwap[i]) / vwap[i] * 100,           # dist_vwap
+                1 if price > or_high[i] else 0,              # or_bull
+                1 if price < or_low[i] else 0,               # or_bear
+                t.hour * 60 + t.minute,                      # minute
+                bar_idx_arr[i],                              # bar_idx
+            ])
+            labels.append(label)
+            day_keys.append(str(dates[i]))
+
+        if n % 10 == 0:
+            _log(f"  processed {n}/{len(symbols)} stocks, {len(rows):,} samples so far")
+
+    X = np.array(rows, dtype=np.float32)
+    y = np.array(labels, dtype=np.int32)
+    _log(f"Dataset ready: {X.shape[0]:,} samples × {X.shape[1]} features "
+         f"from {loaded} stocks ({period} {interval}). Positive rate: {y.mean()*100:.1f}%")
+    return X, y, np.array(day_keys)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", choices=["nifty50", "all"], default="nifty50")
-    ap.add_argument("--horizon", type=int,   default=6,     help="look-ahead bars (6 = 30 min)")
-    ap.add_argument("--target",  type=float, default=0.003, help="profit target fraction (0.003 = +0.3%)")
+    ap.add_argument("--horizon", type=int,   default=6,     help="look-ahead bars")
+    ap.add_argument("--target",  type=float, default=0.003, help="profit target fraction")
+    ap.add_argument("--interval", default="5m", help="bar size: 5m (60d max) or 1h (2y)")
+    ap.add_argument("--period",   default="", help="history window, e.g. 730d or 2y (for non-5m)")
     args = ap.parse_args()
 
     symbols = ALL_SYMBOLS if args.universe == "all" else NIFTY_50
@@ -170,7 +282,13 @@ def main():
     device = detect_device()
     _log(f"Training device: {device.upper()}")
 
-    X, y, days = build_dataset(symbols, args.horizon, args.target)
+    if args.interval == "5m":
+        X, y, days = build_dataset(symbols, args.horizon, args.target)
+    else:
+        period = args.period or "730d"
+        # For hourly, a 6-bar horizon ≈ a whole day; use a smaller default
+        horizon = args.horizon if args.horizon != 6 else 2
+        X, y, days = build_dataset_long(symbols, horizon, args.target, period, args.interval)
     if len(X) < 1000:
         _log("Not enough samples — run backtest.py first to populate the cache.")
         return
@@ -235,10 +353,11 @@ def main():
     print(f"  VERDICT: {verdict}  (AUC {auc:.3f})")
     print("═" * 60)
 
+    out = MODEL_OUT if args.interval == "5m" else MODEL_OUT.with_name(f"ml_{args.interval}.pkl")
     pickle.dump({"model": model, "features": FEATURES,
                  "horizon": args.horizon, "target": args.target,
-                 "auc": auc, "device": device}, open(MODEL_OUT, "wb"))
-    _log(f"Model saved → {MODEL_OUT.name}")
+                 "interval": args.interval, "auc": auc, "device": device}, open(out, "wb"))
+    _log(f"Model saved → {out.name}")
 
 
 if __name__ == "__main__":

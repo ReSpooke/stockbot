@@ -41,3 +41,5 @@ Thumbs.db
 backtest_cache/
 
 ml_intraday.pkl
+ml_1h.pkl
+backtest_cache/

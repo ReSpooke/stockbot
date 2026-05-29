@@ -49,6 +49,7 @@ from data.nse_stocks import NIFTY_50, ALL_SYMBOLS, get_name
 _IST = pytz.timezone("Asia/Kolkata")
 CACHE_DIR = Path(__file__).parent / "backtest_cache"
 CACHE_DIR.mkdir(exist_ok=True)
+MODEL_OUT = Path(__file__).parent / "ml_intraday.pkl"   # produced by train_intraday.py
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -94,18 +95,22 @@ def load_universe(symbols: list[str]) -> dict[str, pd.DataFrame]:
 class Portfolio:
     """Minimal intraday portfolio simulator mirroring trading/executor.py."""
 
-    def __init__(self, capital: float):
+    def __init__(self, capital: float, cost_bps: float = 0.0):
         self.cash       = capital
         self.initial    = capital
         self.positions  = {}            # sym → {qty, avg_cost}
         self.trades     = []            # list of dicts
         self.sold_at_loss_today = set() # for re-entry guard
+        self.cost_rate  = cost_bps / 10000.0   # per-side cost as a fraction
+        self.total_costs= 0.0
 
     def buy(self, sym, price, qty, reason, ts):
-        cost = qty * price
-        if qty <= 0 or cost > self.cash:
+        gross = qty * price
+        fee   = gross * self.cost_rate
+        if qty <= 0 or gross + fee > self.cash:
             return False
-        self.cash -= cost
+        self.cash -= (gross + fee)
+        self.total_costs += fee
         self.positions[sym] = {"qty": qty, "avg_cost": price}
         self.trades.append({"ts": ts, "side": "BUY", "symbol": sym,
                             "qty": qty, "price": price, "pnl": None, "reason": reason})
@@ -115,9 +120,13 @@ class Portfolio:
         pos = self.positions.get(sym)
         if not pos:
             return 0.0
-        qty = pos["qty"]
-        pnl = (price - pos["avg_cost"]) * qty
-        self.cash += qty * price
+        qty   = pos["qty"]
+        gross = qty * price
+        fee   = gross * self.cost_rate
+        # P&L is net of BOTH sides' costs (buy fee approximated on this notional)
+        pnl   = (price - pos["avg_cost"]) * qty - fee - (qty * pos["avg_cost"] * self.cost_rate)
+        self.cash += (gross - fee)
+        self.total_costs += fee
         del self.positions[sym]
         if pnl < 0:
             self.sold_at_loss_today.add(sym)
@@ -133,15 +142,36 @@ class Portfolio:
         self.sold_at_loss_today.clear()
 
 
+def _ml_features(snap: dict, hh: int, mm: int) -> list:
+    """Build the feature vector the intraday model expects, from a snapshot."""
+    price = snap["price"]; vwap = snap.get("vwap") or price
+    orb   = snap.get("or_breakout")
+    return [
+        snap.get("pct_chg", 0),
+        snap.get("rsi", 50),
+        snap.get("macd_hist", 0),
+        snap.get("vol_ratio", 1),
+        (price - vwap) / vwap * 100 if vwap else 0,
+        1 if orb == "bullish" else 0,
+        1 if orb == "bearish" else 0,
+        hh * 60 + mm,
+        snap.get("bars", 0),
+    ]
+
+
 def run_backtest(data: dict, capital: float, buy_min: int,
-                 use_improvements: bool, verbose: bool = True) -> dict:
+                 use_improvements: bool, verbose: bool = True,
+                 cost_bps: float = 0.0, strategy: str = "rules",
+                 ml_bundle: dict | None = None, ml_threshold: float = 0.55) -> dict:
     """
     Replay every day in the loaded data through the decision engine.
+    strategy: 'rules' = hand-coded decision.evaluate(); 'ml' = trained model.
     Returns a results dict with per-day P&L, trades, and summary stats.
     """
     decision.BUY_MIN_OVERRIDE = buy_min
+    ml_model = ml_bundle["model"] if ml_bundle else None
 
-    pf = Portfolio(capital)
+    pf = Portfolio(capital, cost_bps=cost_bps)
 
     # Build the set of all trading days across the universe
     all_days = set()
@@ -207,6 +237,15 @@ def run_backtest(data: dict, capital: float, buy_min: int,
             # Stop new entries / force square-off at SQUARE_OFF_TIME
             past_squareoff = (hh, mm) >= config.SQUARE_OFF_TIME
 
+            # Batch-predict ML probabilities for every stock this bar (one call)
+            ml_proba = {}
+            if strategy == "ml" and snaps:
+                syms_list = list(snaps.keys())
+                feats = np.array([_ml_features(snaps[s], hh, mm) for s in syms_list],
+                                 dtype=np.float32)
+                probs = ml_model.predict_proba(feats)[:, 1]
+                ml_proba = dict(zip(syms_list, probs))
+
             # ── Manage held positions (exits first) ──────────────────────
             for sym in list(pf.positions.keys()):
                 snap = snaps.get(sym)
@@ -227,10 +266,14 @@ def run_backtest(data: dict, capital: float, buy_min: int,
                    and snap.get("above_vwap") is False and chg < 0:
                     pf.sell(sym, price, "weak-exit", ts);  continue
 
-                # Decision-engine exit
-                dec = decision.evaluate(snap, hh, mm, holding=True, avg_cost=avg)
-                if dec["action"] == "SELL":
-                    pf.sell(sym, price, dec.get("exit_type") or "signal", ts)
+                if strategy == "ml":
+                    # Exit when the model no longer expects an up-move
+                    if ml_proba.get(sym, 1.0) < 0.40:
+                        pf.sell(sym, price, "ml-exit", ts)
+                else:
+                    dec = decision.evaluate(snap, hh, mm, holding=True, avg_cost=avg)
+                    if dec["action"] == "SELL":
+                        pf.sell(sym, price, dec.get("exit_type") or "signal", ts)
 
             # Square-off: close everything, skip new buys
             if past_squareoff:
@@ -247,17 +290,24 @@ def run_backtest(data: dict, capital: float, buy_min: int,
                 if use_improvements and config.NO_REENTRY_AFTER_LOSS \
                    and sym in pf.sold_at_loss_today:
                     continue
-                dec = decision.evaluate(snap, hh, mm, holding=False)
-                if dec["action"] == "BUY":
-                    buys.append((dec["score"], dec["qty_pct"], sym, snap["price"]))
+                if strategy == "ml":
+                    p = float(ml_proba.get(sym, 0.0))
+                    if p >= ml_threshold:
+                        # rank by probability; size by conviction
+                        qty_pct = 0.20 if p >= ml_threshold + 0.10 else 0.15
+                        buys.append((p, qty_pct, sym, snap["price"]))
+                else:
+                    dec = decision.evaluate(snap, hh, mm, holding=False)
+                    if dec["action"] == "BUY":
+                        buys.append((dec["score"], dec["qty_pct"], sym, snap["price"]))
 
-            buys.sort(reverse=True)   # highest score first
+            buys.sort(reverse=True)   # highest score / probability first
             for score, qty_pct, sym, price in buys:
                 if len(pf.positions) >= config.MAX_INTRADAY_POS:
                     break
                 qty = max(1, int(pf.cash * qty_pct / price))
                 if qty * price <= pf.cash * 0.95:
-                    pf.buy(sym, price, qty, f"score={score}", ts)
+                    pf.buy(sym, price, qty, f"p={score:.2f}" if strategy == "ml" else f"score={score}", ts)
 
         # End of day — square off anything still open at last price
         for sym in list(pf.positions.keys()):
@@ -374,6 +424,12 @@ def main():
                     help="disable re-entry guard + weak-position exit")
     ap.add_argument("--ab", action="store_true",
                     help="run A/B: baseline vs improvements, side by side")
+    ap.add_argument("--cost-bps", type=float, default=10.0,
+                    help="round-trip trading cost in basis points (10 = 0.10%)")
+    ap.add_argument("--strategy", choices=["rules", "ml", "compare"], default="rules",
+                    help="'compare' = rules vs ML head-to-head")
+    ap.add_argument("--ml-threshold", type=float, default=0.55,
+                    help="ML probability threshold to buy")
     args = ap.parse_args()
 
     symbols = ALL_SYMBOLS if args.universe == "all" else NIFTY_50
@@ -388,21 +444,52 @@ def main():
         keep = set(all_days[-args.days:])
         data = {s: df[pd.Series(df.index.date, index=df.index).isin(keep)] for s, df in data.items()}
 
+    # Load ML model if needed
+    ml_bundle = None
+    if args.strategy in ("ml", "compare"):
+        if not MODEL_OUT.exists():
+            print(f"No model at {MODEL_OUT.name}. Run train_intraday.py first.")
+            return
+        ml_bundle = pickle.load(open(MODEL_OUT, "rb"))
+        try:
+            ml_bundle["model"].set_params(device="cpu")   # fast single-batch CPU predict
+        except Exception:
+            pass
+        print(f"Loaded ML model (trained AUC {ml_bundle.get('auc', 0):.3f})")
+
+    print(f"\nTrading cost model: {args.cost_bps:.0f} bps round-trip "
+          f"(₹{args.cost_bps/100:.2f} per ₹100 traded)")
+
     if args.ab:
-        print("\nRunning A/B comparison (this runs the full backtest twice)…")
-        base = run_backtest(data, args.capital, args.buy_min, use_improvements=False, verbose=False)
-        impr = run_backtest(data, args.capital, args.buy_min, use_improvements=True, verbose=False)
+        print("\nRunning A/B comparison (baseline vs improvements)…")
+        base = run_backtest(data, args.capital, args.buy_min, use_improvements=False,
+                            verbose=False, cost_bps=args.cost_bps)
+        impr = run_backtest(data, args.capital, args.buy_min, use_improvements=True,
+                            verbose=False, cost_bps=args.cost_bps)
         print_report(base, f"BASELINE (buy_min={args.buy_min}, no improvements)", args.capital)
-        print_report(impr, f"WITH IMPROVEMENTS (re-entry guard + weak exit)", args.capital)
+        print_report(impr, "WITH IMPROVEMENTS (re-entry guard + weak exit)", args.capital)
+        print(f"\n  Δ return : {impr['total_return'] - base['total_return']:+.2f} pts")
+
+    elif args.strategy == "compare":
+        print("\nRunning RULES vs ML head-to-head (with costs)…")
+        rules = run_backtest(data, args.capital, args.buy_min, use_improvements=True,
+                             verbose=False, cost_bps=args.cost_bps, strategy="rules")
+        ml    = run_backtest(data, args.capital, args.buy_min, use_improvements=True,
+                             verbose=False, cost_bps=args.cost_bps, strategy="ml",
+                             ml_bundle=ml_bundle, ml_threshold=args.ml_threshold)
+        print_report(rules, "RULES engine (hand-coded weights)", args.capital)
+        print_report(ml,    f"ML model (XGBoost, p≥{args.ml_threshold})", args.capital)
         print()
-        print(f"  Δ return : {impr['total_return'] - base['total_return']:+.2f} pts")
-        print(f"  Δ winrate: {impr['win_rate'] - base['win_rate']:+.1f} pts")
+        print(f"  Rules return : {rules['total_return']:+.2f}%")
+        print(f"  ML return    : {ml['total_return']:+.2f}%")
+        print(f"  Winner       : {'ML' if ml['total_return'] > rules['total_return'] else 'RULES'}")
+
     else:
         r = run_backtest(data, args.capital, args.buy_min,
-                         use_improvements=not args.no_improvements)
-        lbl = f"{args.universe}, buy_min={args.buy_min}" + \
-              ("" if args.no_improvements else ", +improvements")
-        print_report(r, lbl, args.capital)
+                         use_improvements=not args.no_improvements,
+                         cost_bps=args.cost_bps, strategy=args.strategy,
+                         ml_bundle=ml_bundle, ml_threshold=args.ml_threshold)
+        print_report(r, f"{args.universe}, {args.strategy}", args.capital)
 
 
 if __name__ == "__main__":
