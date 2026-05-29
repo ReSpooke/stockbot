@@ -17,7 +17,7 @@ _IST = pytz.timezone("Asia/Kolkata")
 def _fetch_today(symbol: str) -> pd.DataFrame:
     """Return today's 5-min bars for an NSE symbol (OHLCV, IST-indexed)."""
     yf_sym = symbol + ".NS"
-    df = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
+    df = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
     if df is None or df.empty:
         return pd.DataFrame()
     df.index = df.index.tz_convert(_IST)
@@ -80,9 +80,8 @@ def intraday_snapshot(symbol: str) -> dict:
     Returns empty dict if market hasn't opened or data unavailable.
     """
     try:
-        # Need yesterday close for pct_chg
         yf_sym = symbol + ".NS"
-        df_2d = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
+        df_2d = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
         if df_2d is None or df_2d.empty:
             return {}
         df_2d.index = df_2d.index.tz_convert(_IST)
@@ -94,14 +93,16 @@ def intraday_snapshot(symbol: str) -> dict:
         if len(today_df) < 3:
             return {}
 
-        prev_close = float(prev_df["Close"].iloc[-1]) if not prev_df.empty else None
+        if not prev_df.empty:
+            prev_close = float(prev_df["Close"].iloc[-1])
+        else:
+            prev_close = float(today_df["Open"].iloc[0])
         last_price = float(today_df["Close"].iloc[-1])
-        pct_chg    = round((last_price - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+        pct_chg    = round((last_price - prev_close) / prev_close * 100, 2)
 
-        # Volume ratio
-        avg_vol   = float(prev_df["Volume"].mean()) if not prev_df.empty else 1.0
+        avg_vol   = float(prev_df["Volume"].mean()) if not prev_df.empty else float(today_df["Volume"].mean())
         today_vol = float(today_df["Volume"].sum())
-        bars_pct  = len(today_df) / 75          # expected ~75 bars in full session
+        bars_pct  = len(today_df) / 75
         vol_ratio = round(today_vol / max(avg_vol * bars_pct, 1), 1)
 
         vwap_val  = vwap(today_df)
@@ -109,8 +110,7 @@ def intraday_snapshot(symbol: str) -> dict:
         rsi_val   = _rsi(today_df["Close"])
         macd_info = _macd(today_df["Close"])
 
-        # Breakout flags
-        above_vwap  = last_price > vwap_val if not np.isnan(vwap_val) else None
+        above_vwap  = bool(last_price > vwap_val) if not np.isnan(vwap_val) else None
         or_breakout = None
         if or_info:
             if last_price > or_info["or_high"]:
@@ -120,13 +120,12 @@ def intraday_snapshot(symbol: str) -> dict:
             else:
                 or_breakout = "inside"
 
-        # Momentum score (same as screener)
         score = round(abs(pct_chg) * min(vol_ratio, 5), 3)
 
         return {
             "symbol":      symbol,
             "price":       round(last_price, 2),
-            "prev_close":  round(prev_close, 2) if prev_close else None,
+            "prev_close":  round(prev_close, 2),
             "pct_chg":     pct_chg,
             "volume":      int(today_vol),
             "vol_ratio":   vol_ratio,

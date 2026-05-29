@@ -210,18 +210,21 @@ def _score_one(sym: str) -> dict | None:
             "rsi":         round(rsi_val, 1),
             "macd_hist":   round(macd_hist, 4),
             "or_breakout": or_breakout,
+            "above_vwap":  above_vwap,
             "signal":      signal,
         }
     except Exception:
         return None
 
 
-def screen_top(n: int = 15, universe: list[str] = None) -> list[dict]:
+def screen_all(universe: list[str] = None) -> list[dict]:
     """
-    Scan NSE stocks and return top-n by intraday momentum.
-    Default universe is Nifty 50 (fast ~15s). Pass ALL_SYMBOLS for full scan.
+    Scan all NSE stocks in the universe and return every result sorted by
+    momentum score (highest first).  n=None means return all.
+
+    Default universe = ALL_SYMBOLS (~150 stocks, ~20-30s on a free-tier host).
     """
-    syms = universe or NIFTY_50
+    syms = universe or ALL_SYMBOLS
     results = []
     with ThreadPoolExecutor(max_workers=15) as pool:
         futures = {pool.submit(_score_one, s): s for s in syms}
@@ -230,5 +233,10 @@ def screen_top(n: int = 15, universe: list[str] = None) -> list[dict]:
             if r:
                 results.append(r)
     results.sort(key=lambda x: x["score"], reverse=True)
-    log.info("[Screener] Scanned %d stocks → top %d candidates", len(results), min(n, len(results)))
-    return results[:n]
+    log.info("[Screener] Scanned %d / %d stocks", len(results), len(syms))
+    return results
+
+
+def screen_top(n: int = 20, universe: list[str] = None) -> list[dict]:
+    """Convenience wrapper — return top-n by momentum score."""
+    return screen_all(universe)[:n]

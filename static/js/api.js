@@ -30,8 +30,8 @@ const API = (() => {
     intradayState: ()      => _get('/api/intraday_state'),
     intraday:      (sym)   => _get('/api/intraday/' + encodeURIComponent(sym)),
     search:        (q)     => _get('/api/search?q=' + encodeURIComponent(q)),
+    botLog:        (n)     => _get('/api/bot_log?limit=' + (n || 100)),
 
-    setAutoTrade:  (enabled) => _post('/api/auto_trade', { enabled }),
     squareOff:     ()        => _post('/api/squareoff', {}),
     trade:         (symbol, side, price) => _post('/api/trade', { symbol, side, price }),
   };

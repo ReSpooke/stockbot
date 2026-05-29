@@ -95,28 +95,31 @@ function renderScreener(data) {
   const status = document.getElementById('screener-status');
 
   if (data.scan_status === 'scanning') {
-    const since = data.scan_started ? ` (started ${data.scan_started})` : '';
-    status.textContent = `Scanning Nifty 50…${since}`;
+    const since = data.scan_started ? ` since ${data.scan_started}` : '';
+    status.textContent = `Scanning all NSE stocks${since}…`;
+    status.style.color = 'var(--yellow)';
   } else if (data.scan_status === 'error') {
     status.style.color = 'var(--red)';
-    status.textContent = 'Scan error — will retry in 5 min';
+    status.textContent = 'Scan error — retrying in 5 min';
   } else if (data.last_scan) {
-    status.style.color = '';
-    status.textContent = `Last scan: ${data.last_scan} | ${items.length} stocks`;
+    status.style.color = 'var(--dim)';
+    status.textContent = `Last scan ${data.last_scan} · ${items.length} stocks · Bot always active`;
   } else if (data.market_open) {
-    status.textContent = 'Market open — first scan starting…';
+    status.style.color = 'var(--dim)';
+    status.textContent = 'Market open — first scan in progress…';
   } else {
-    status.textContent = 'Market closed (opens 9:15 AM IST Mon–Fri)';
+    status.style.color = 'var(--dim)';
+    status.textContent = 'Market closed · Bot activates at 9:15 AM IST (Mon–Fri)';
   }
 
   const tbody = document.getElementById('screener-body');
   if (!items.length) {
     const msg = data.scan_status === 'scanning'
-      ? `First scan in progress (scanning 50 stocks, ~20s)…`
+      ? 'Scanning all NSE stocks (~30s for first scan)…'
       : data.market_open
-        ? 'Waiting for scan results…'
-        : 'Market closed. Opens 9:15 AM IST (Mon–Fri).';
-    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--dim);text-align:center;padding:30px">${msg}</td></tr>`;
+        ? 'Waiting for first scan…'
+        : 'Market closed. Bot activates at 9:15 AM IST.';
+    tbody.innerHTML = `<tr><td colspan="11" style="color:var(--dim);text-align:center;padding:30px">${msg}</td></tr>`;
     return;
   }
 
@@ -127,17 +130,20 @@ function renderScreener(data) {
     const vwap = s.vwap ? rupee(s.vwap) : '—';
     const rsi  = s.rsi  ? fmt(s.rsi, 1) : '—';
     const orb  = s.or_breakout || '—';
+    const abv  = s.above_vwap === true ? '↑' : s.above_vwap === false ? '↓' : '—';
+    const abvC = s.above_vwap === true ? 'pos' : s.above_vwap === false ? 'neg' : 'neu';
     return `<tr onclick="onSymbolClick('${s.symbol}')" style="cursor:pointer">
       <td style="color:var(--dim)">${i + 1}</td>
       <td><strong>${s.symbol}</strong></td>
       <td style="color:var(--dim);font-size:12px">${s.name || ''}</td>
       <td class="r">${rupee(s.price)}</td>
       <td class="r ${pc}">${signStr(pct)}${fmt(pct)}%</td>
-      <td class="r">${fmt(s.vol_ratio || 0, 1)}x</td>
-      <td class="r">${vwap}</td>
+      <td class="r">${fmt(s.vol_ratio || 0, 1)}×</td>
+      <td class="r">${vwap} <span class="${abvC}">${abv}</span></td>
       <td class="r">${rsi}</td>
       <td>${orb}</td>
       <td><span class="badge ${badgeClass(sig)}">${sig}</span></td>
+      <td class="r" style="color:var(--dim);font-size:11px">${s.score ? fmt(s.score, 2) : '—'}</td>
     </tr>`;
   }).join('');
 }
@@ -295,10 +301,49 @@ function renderNews(articles) {
   }).join('');
 }
 
-/* ── Auto-trade button ───────────────────────────────────────────────────── */
+/* ── Bot status indicator ────────────────────────────────────────────────── */
 
-function renderAutoBtn(enabled) {
-  const btn = document.getElementById('auto-btn');
-  btn.className = enabled ? 'on' : 'off';
-  btn.textContent = enabled ? 'AUTO ON' : 'AUTO OFF';
+function renderBotStatus(state) {
+  const el = document.getElementById('bot-status');
+  if (!el) return;
+  if (state.market_open && state.trading_hours) {
+    el.className  = 'bot-active';
+    el.textContent = `BOT ACTIVE · ${state.trades_today || 0} trades today · P&L ${state.daily_pnl >= 0 ? '+' : ''}₹${(state.daily_pnl || 0).toFixed(0)}`;
+  } else if (state.market_open) {
+    el.className  = 'bot-idle';
+    el.textContent = 'BOT IDLE · Market open, trading window closed';
+  } else {
+    el.className  = 'bot-idle';
+    el.textContent = 'BOT OFFLINE · Market closed';
+  }
+}
+
+/* ── Bot decision log ────────────────────────────────────────────────────── */
+
+function renderBotLog(entries) {
+  const el = document.getElementById('bot-log-body');
+  if (!el) return;
+  if (!entries.length) {
+    el.innerHTML = '<tr><td colspan="7" style="color:var(--dim);text-align:center;padding:30px">No decisions yet — bot activates at 9:15 AM IST</td></tr>';
+    return;
+  }
+  el.innerHTML = entries.map(e => {
+    const ac  = e.action || 'HOLD';
+    const ac2 = e.traded ? ac : (ac === 'BUY' || ac === 'SELL') ? 'SKIP' : ac;
+    const cls = ac === 'BUY' ? 'side-buy' : ac === 'SELL' ? 'side-sell' : 'neu';
+    const pnlHtml = e.pnl != null
+      ? `<span class="${signClass(e.pnl)}">${signStr(e.pnl)}₹${Math.abs(e.pnl).toFixed(0)}</span>`
+      : '—';
+    const tradeIcon = e.traded ? '✓' : '';
+    const reasons = (e.reasons || []).join(' · ');
+    return `<tr>
+      <td style="color:var(--dim);font-size:11px">${e.time || ''}</td>
+      <td class="${cls}" style="font-weight:700">${ac2}</td>
+      <td><strong>${e.symbol || '—'}</strong></td>
+      <td class="r">${e.price ? rupee(e.price) : '—'}</td>
+      <td class="r" style="color:${e.score >= 5 ? 'var(--green)' : e.score <= -4 ? 'var(--red)' : 'var(--dim)'}">${e.score >= 0 ? '+' : ''}${e.score}</td>
+      <td class="r">${pnlHtml}</td>
+      <td style="color:var(--dim);font-size:11px;max-width:300px">${reasons}</td>
+    </tr>`;
+  }).join('');
 }

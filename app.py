@@ -17,10 +17,11 @@ from flask import Flask, jsonify, render_template, redirect, request, url_for
 import config
 from database import db
 from data import stock_data, news_scraper
-from data.nse_stocks import screen_top, search as nse_search
+from data.nse_stocks import screen_all, screen_top, search as nse_search
 from analysis import signals as sig_gen
 from analysis import sentiment as sent
 from analysis.intraday import intraday_snapshot, intraday_signal
+from analysis.decision import evaluate as decide
 from trading import portfolio as pf
 from trading import executor
 from utils.logger import log
@@ -43,19 +44,30 @@ _state = {
 }
 _lock = threading.Lock()
 
-# ── Intraday auto-trading state ───────────────────────────────────────────
+# ── Intraday bot state ────────────────────────────────────────────────────
 
 _intraday = {
-    "enabled":       False,     # toggled by user via /api/auto_trade
-    "last_scan":     None,      # ISO timestamp of last 5-min scan
-    "scan_results":  [],        # top stocks from last screener run
-    "daily_pnl":     0.0,       # realised P&L today (₹)
+    "last_scan":     None,   # HH:MM:SS of last completed scan
+    "scan_results":  [],     # all scanned stocks sorted by momentum score
+    "daily_pnl":     0.0,   # realised P&L today (₹)
     "trades_today":  0,
-    "squared_off":   False,     # True after EOD square-off
-    "scan_status":   "idle",    # idle | scanning | done | error
-    "scan_started":  None,      # ISO timestamp when current scan started
+    "squared_off":   False,
+    "scan_status":   "idle",
+    "scan_started":  None,
 }
 _intraday_lock = threading.Lock()
+
+# ── Bot decision log (newest first, max 300 entries) ─────────────────────
+
+_decision_log: list = []
+_decision_lock = threading.Lock()
+
+
+def _log(entries: list) -> None:
+    """Prepend entries to the decision log; trim to 300."""
+    with _decision_lock:
+        _decision_log[:0] = entries          # prepend
+        del _decision_log[300:]
 
 # ── Live data caches (updated by background threads) ─────────────────────
 
@@ -123,88 +135,133 @@ def _background_price_refresh() -> None:
 
 
 def _background_intraday_scan() -> None:
-    """Every SCAN_INTERVAL_SECS: screen Nifty 50 + auto-trade if enabled."""
+    """Every SCAN_INTERVAL_SECS: scan ALL NSE stocks → run decision engine → trade."""
     while True:
         if not _is_trading_hours():
             time.sleep(30)
             continue
 
-        scan_start = time.monotonic()
+        t0 = time.monotonic()
+        now = _ist_now()
         with _intraday_lock:
-            enabled     = _intraday["enabled"]
             squared_off = _intraday["squared_off"]
             _intraday["scan_status"]  = "scanning"
-            _intraday["scan_started"] = datetime.now().strftime("%H:%M:%S")
+            _intraday["scan_started"] = now.strftime("%H:%M:%S")
 
         try:
-            top = screen_top(n=20)   # scans Nifty 50 by default (~15s)
-            elapsed = time.monotonic() - scan_start
+            all_results = screen_all()           # scan every stock in UNIVERSE
+            elapsed = time.monotonic() - t0
             with _intraday_lock:
-                _intraday["scan_results"] = top
+                _intraday["scan_results"] = all_results
                 _intraday["last_scan"]    = datetime.now().strftime("%H:%M:%S")
                 _intraday["scan_status"]  = "done"
-            log.info("[Screener] Scan done in %.1fs — %d results", elapsed, len(top))
+            log.info("[Bot] Scan done in %.1fs — %d stocks", elapsed, len(all_results))
 
-            if enabled and not squared_off:
-                _execute_intraday_trades(top)
+            if not squared_off:
+                _run_decision_cycle(all_results, now.hour, now.minute)
 
         except Exception as exc:
-            log.error("[Intraday scan] %s", exc)
+            log.error("[Bot] Scan error: %s", exc)
             with _intraday_lock:
                 _intraday["scan_status"] = "error"
 
         time.sleep(config.SCAN_INTERVAL_SECS)
 
 
-def _execute_intraday_trades(top_stocks: list) -> None:
+def _run_decision_cycle(all_results: list, ist_hour: int, ist_minute: int) -> None:
     """
-    Auto-trade using screener results directly — no extra yfinance calls.
-    Each item already has price, signal, vwap, rsi from the screener scan.
+    Run the decision engine on every scanned stock.
+    Execute trades for BUY/SELL decisions; log every evaluation.
     """
     with _intraday_lock:
         daily_pnl = _intraday["daily_pnl"]
 
     if daily_pnl < -(config.INITIAL_CAPITAL * config.MAX_INTRADAY_LOSS):
-        log.warning("[AutoTrade] Daily loss limit hit — pausing trades")
+        log.warning("[Bot] Daily loss limit reached — skipping cycle")
+        _log([{"time": _ist_now().strftime("%H:%M:%S"), "symbol": "—",
+                "action": "PAUSED", "score": 0, "confidence": "—", "price": 0,
+                "pct_chg": 0, "reasons": [f"Daily loss limit ₹{daily_pnl:.0f}"],
+                "traded": False, "pnl": None}])
         return
 
     positions  = pf.get_positions()
-    prices_now = {item["symbol"]: item["price"] for item in top_stocks if item.get("price")}
+    cash       = pf.get_cash()
+    prices_now = {r["symbol"]: r["price"] for r in all_results if r.get("price")}
+    cycle_log  = []
+    buy_queue  = []   # (decision, item) — executed after SELLs, sorted by score
 
-    cash = pf.get_cash()
-
-    for item in top_stocks[:10]:
-        sym    = item["symbol"]
-        price  = item.get("price")
-        signal = item.get("signal", "HOLD")
-
-        if not price:
+    for item in all_results:
+        sym   = item.get("symbol")
+        price = item.get("price")
+        if not sym or not price:
             continue
 
-        if signal == "BUY" and sym not in positions:
-            if len(positions) >= config.MAX_INTRADAY_POS:
-                log.debug("[AutoTrade] Max positions reached, skipping %s", sym)
-                break
-            qty = max(1, int(cash * config.INTRADAY_QTY_PCT / price))
-            r   = executor.buy(sym, price, f"Auto: {signal} score={item.get('score',0):.2f}")
-            if r.get("ok"):
-                cash -= qty * price   # update local cash estimate
-                positions[sym] = True  # mark as held to prevent double-buy
-                with _intraday_lock:
-                    _intraday["trades_today"] += 1
-                log.info("[AutoTrade] BUY %s %d @ %.2f", sym, qty, price)
+        dec = decide(item, ist_hour, ist_minute)
+        entry = {
+            "time":       _ist_now().strftime("%H:%M:%S"),
+            "symbol":     sym,
+            "action":     dec["action"],
+            "score":      dec["score"],
+            "confidence": dec["confidence"],
+            "price":      price,
+            "pct_chg":    item.get("pct_chg", 0),
+            "reasons":    dec["reasons"],
+            "traded":     False,
+            "pnl":        None,
+        }
 
-        elif signal == "SELL" and sym in positions:
-            r = executor.sell(sym, price, f"Auto: {signal} score={item.get('score',0):.2f}")
+        if dec["action"] == "SELL" and sym in positions:
+            r = executor.sell(sym, price,
+                              f"Bot SELL score={dec['score']} | " +
+                              "; ".join(dec["reasons"][:2]))
             if r.get("ok"):
                 pnl = r.get("pnl", 0) or 0
+                entry["traded"] = True
+                entry["pnl"]    = round(pnl, 2)
                 with _intraday_lock:
                     _intraday["daily_pnl"]   += pnl
                     _intraday["trades_today"] += 1
-                log.info("[AutoTrade] SELL %s @ %.2f  P&L=%.2f", sym, price, pnl)
+                log.info("[Bot] SELL %s @ %.2f  score=%d  P&L=%.2f",
+                         sym, price, dec["score"], pnl)
 
-    # SL/TP check uses prices already fetched by the screener — no extra calls
+        elif dec["action"] == "BUY" and sym not in positions:
+            buy_queue.append((dec, item, entry))
+
+        cycle_log.append(entry)
+
+    # Execute BUY candidates sorted by highest conviction first
+    buy_queue.sort(key=lambda x: x[0]["score"], reverse=True)
+
+    for dec, item, entry in buy_queue:
+        sym   = item["symbol"]
+        price = item["price"]
+
+        # Re-read position count after any SELLs above
+        if len(pf.get_positions()) >= config.MAX_INTRADAY_POS:
+            entry["reasons"].append("Skipped — max positions")
+            continue
+
+        qty  = max(1, int(cash * dec["qty_pct"] / price))
+        cost = qty * price
+        if cost > cash * 0.95:
+            entry["reasons"].append("Skipped — insufficient cash")
+            continue
+
+        r = executor.buy(sym, price,
+                         f"Bot BUY score={dec['score']} {dec['confidence']} | " +
+                         "; ".join(dec["reasons"][:2]))
+        if r.get("ok"):
+            cash -= cost
+            entry["traded"] = True
+            with _intraday_lock:
+                _intraday["trades_today"] += 1
+            log.info("[Bot] BUY %s %d @ %.2f  score=%d  %s",
+                     sym, qty, price, dec["score"], dec["confidence"])
+
+    # SL/TP sweep — no extra API calls needed
     executor.check_stop_loss_take_profit(prices_now)
+
+    _log(cycle_log)
 
 
 def _background_squareoff_watch() -> None:
@@ -214,18 +271,17 @@ def _background_squareoff_watch() -> None:
         sq  = config.SQUARE_OFF_TIME
         if now.weekday() < 5 and (now.hour, now.minute) >= sq:
             with _intraday_lock:
-                if not _intraday["squared_off"]:
+                already_done = _intraday["squared_off"]
+            if not already_done:
+                with _intraday_lock:
                     _intraday["squared_off"] = True
-                    _intraday["enabled"]     = False   # stop new trades
+                _do_squareoff()
 
-            _do_squareoff()
-
-        # Reset squared_off flag at midnight for next day
         if now.hour == 0 and now.minute < 2:
             with _intraday_lock:
-                _intraday["squared_off"] = False
-                _intraday["daily_pnl"]   = 0.0
-                _intraday["trades_today"]= 0
+                _intraday["squared_off"]  = False
+                _intraday["daily_pnl"]    = 0.0
+                _intraday["trades_today"] = 0
 
         time.sleep(30)
 
@@ -267,13 +323,6 @@ def _background_keepalive() -> None:
             log.debug("[Keepalive] %s", exc)
 
 
-def _restore_auto_state() -> None:
-    """Re-apply the auto-trade preference saved in the DB after a restart."""
-    saved = db.get_setting("auto_trade_enabled", "0")
-    if saved == "1":
-        with _intraday_lock:
-            _intraday["enabled"] = True
-        log.info("[AutoTrade] Restored: ENABLED (from DB)")
 
 
 def _start_background_threads() -> None:
@@ -542,22 +591,28 @@ def api_intraday_symbol(symbol):
 def api_intraday_state():
     with _intraday_lock:
         state = dict(_intraday)
-    state["trading_hours"] = _is_trading_hours()   # bot may place trades
-    state["market_open"]   = _nse_market_open()    # actual NSE session
+        # Expose only top 30 for display (full list can be large)
+        state["scan_results"] = state["scan_results"][:30]
+    state["trading_hours"] = _is_trading_hours()
+    state["market_open"]   = _nse_market_open()
     state["ist_time"]      = _ist_now().strftime("%H:%M:%S")
+    state["always_auto"]   = True
     return jsonify(state)
+
+
+@app.route("/api/bot_log")
+def api_bot_log():
+    """Return the bot's decision log (newest first)."""
+    limit = int(request.args.get("limit", 100))
+    with _decision_lock:
+        entries = list(_decision_log[:limit])
+    return jsonify(entries)
 
 
 @app.route("/api/auto_trade", methods=["POST"])
 def api_auto_trade():
-    """Toggle auto-trading on or off. Persists across server restarts."""
-    data    = request.get_json() or {}
-    enabled = bool(data.get("enabled", False))
-    with _intraday_lock:
-        _intraday["enabled"] = enabled
-    db.set_setting("auto_trade_enabled", "1" if enabled else "0")
-    log.info("[AutoTrade] %s", "ENABLED" if enabled else "DISABLED")
-    return jsonify({"ok": True, "enabled": enabled})
+    """Kept for backwards-compat. Bot always runs during market hours."""
+    return jsonify({"ok": True, "enabled": True, "note": "Bot always auto-trades"})
 
 
 @app.route("/api/search")
@@ -612,7 +667,6 @@ def api_trade():
 
 def create_app():
     db.init_db()
-    _restore_auto_state()
     _start_background_threads()
     threading.Thread(target=_maybe_train_ml, daemon=True).start()
     return app
@@ -620,7 +674,6 @@ def create_app():
 
 if __name__ == "__main__":
     db.init_db()
-    _restore_auto_state()
     _start_background_threads()
     threading.Thread(target=_maybe_train_ml, daemon=True).start()
     log.info("Starting StockBot web server at http://%s:%d", config.WEB_HOST, config.WEB_PORT)

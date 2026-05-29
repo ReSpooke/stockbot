@@ -3,11 +3,11 @@
  * Depends on: api.js, ui.js (loaded first via <script> tags).
  *
  * INITIAL_CAP is injected by the Flask template into the global scope.
+ * The bot is ALWAYS active during market hours — no toggle needed.
  */
 
 /* ── State ───────────────────────────────────────────────────────────────── */
 
-let autoEnabled  = false;
 let activeSymbol = null;
 let activeSnap   = null;   // last intraday snapshot (used by manual trade)
 
@@ -18,7 +18,7 @@ renderClock();
 
 /* ── Tabs ────────────────────────────────────────────────────────────────── */
 
-const TAB_NAMES = ['screener', 'portfolio', 'trades', 'news'];
+const TAB_NAMES = ['screener', 'portfolio', 'trades', 'news', 'botlog'];
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach((el, i) =>
@@ -29,10 +29,10 @@ function switchTab(name) {
   );
   document.getElementById('tab-' + name).classList.add('active');
 
-  // Lazy-load data for each tab
   if (name === 'portfolio') loadPortfolio();
   if (name === 'trades')    loadTrades();
   if (name === 'news')      loadNews();
+  if (name === 'botlog')    loadBotLog();
 }
 
 /* ── Market status ───────────────────────────────────────────────────────── */
@@ -74,7 +74,6 @@ function onSymbolClick(sym) {
 }
 
 async function loadIntradayDetail(sym) {
-  // Show placeholder while loading
   document.getElementById('intraday-detail').style.display = 'block';
   document.getElementById('id-sym-title').textContent = sym + ' — Intraday';
   document.getElementById('id-grid').innerHTML =
@@ -83,7 +82,6 @@ async function loadIntradayDetail(sym) {
     const data = await API.intraday(sym);
     activeSnap = data;
     renderIntradayDetail(sym, data);
-    // Refresh watchlist to highlight active symbol
     loadWatchlist();
   } catch (e) {
     activeSnap = null;
@@ -101,7 +99,6 @@ async function triggerScan() {
   const btn = document.getElementById('scan-btn');
   btn.textContent = 'Scanning…';
   btn.disabled = true;
-  // The background thread does the actual work; just wait then refresh
   await new Promise(r => setTimeout(r, 3000));
   await loadScreener();
   btn.textContent = 'Refresh Scan';
@@ -133,30 +130,19 @@ async function loadNews() {
   } catch (e) {}
 }
 
-/* ── Auto-trade toggle ───────────────────────────────────────────────────── */
+/* ── Bot log ─────────────────────────────────────────────────────────────── */
 
-async function toggleAutoTrade() {
-  const next = !autoEnabled;
-  try {
-    await API.setAutoTrade(next);
-    autoEnabled = next;
-    renderAutoBtn(autoEnabled);
-    toast(
-      autoEnabled
-        ? 'Auto-trading ENABLED — bot buys/sells every 5 min during market hours'
-        : 'Auto-trading DISABLED',
-      autoEnabled ? 'ok' : ''
-    );
-  } catch (e) {
-    toast('Failed to toggle auto-trade', 'err');
-  }
+async function loadBotLog() {
+  try { renderBotLog(await API.botLog(200)); } catch (e) {}
 }
 
-async function syncAutoState() {
+/* ── Bot status (top bar) ────────────────────────────────────────────────── */
+
+async function syncBotStatus() {
   try {
     const data = await API.intradayState();
-    autoEnabled = data.enabled;
-    renderAutoBtn(autoEnabled);
+    renderBotStatus(data);
+    // Also keep portfolio bar fresh from the state
   } catch (e) {}
 }
 
@@ -167,8 +153,7 @@ async function manualTrade(side) {
   if (!activeSnap || !activeSnap.price) { toast('No price data — try again', 'err'); return; }
 
   const price = activeSnap.price;
-  const label = side.toUpperCase();
-  if (!confirm(`${label} ${activeSymbol} @ ₹${price.toFixed(2)}?`)) return;
+  if (!confirm(`${side.toUpperCase()} ${activeSymbol} @ ₹${price.toFixed(2)}?`)) return;
 
   try {
     const result = await API.trade(activeSymbol, side, price);
@@ -201,27 +186,22 @@ async function init() {
     loadWatchlist(),
     loadScreener(),
     loadPortfolio(),
-    syncAutoState(),
+    syncBotStatus(),
   ]);
 }
 
 init();
 
-// Polling intervals
 setInterval(loadMarketStatus, 30_000);
 setInterval(loadWatchlist,    15_000);
 setInterval(loadPortfolio,    20_000);
+setInterval(syncBotStatus,    30_000);
 
-// Screener: poll every 10s while scanning, every 30s once stable
-let _screenerInterval = null;
-function _startScreenerPolling() {
-  if (_screenerInterval) clearInterval(_screenerInterval);
-  _screenerInterval = setInterval(async () => {
-    await loadScreener();
-  }, 10_000);
-}
-_startScreenerPolling();
-setInterval(syncAutoState,    60_000);
+// Poll screener every 10s (background scan is ~30s; this catches updates quickly)
+setInterval(loadScreener, 10_000);
+
+// Bot log auto-refreshes when the tab is visible
 setInterval(() => {
-  if (document.getElementById('tab-news').classList.contains('active')) loadNews();
-}, 60_000);
+  if (document.getElementById('tab-botlog').classList.contains('active')) loadBotLog();
+  if (document.getElementById('tab-news').classList.contains('active'))   loadNews();
+}, 15_000);

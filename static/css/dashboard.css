@@ -68,6 +68,26 @@ body {
 .mkt-closed { background: rgba(239,83,80,.08); border-color: #555; color: var(--dim); }
 .mkt-closed .dot { background: var(--dim); }
 
+/* Bot status chip */
+#bot-status {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  letter-spacing: .3px;
+}
+.bot-active {
+  background: rgba(38,166,154,.15);
+  border: 1px solid var(--green);
+  color: var(--green);
+}
+.bot-idle {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--dim);
+}
+
 #topbar .spacer { flex: 1; }
 
 #portfolio-bar {

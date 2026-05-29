@@ -19,7 +19,8 @@
     <span class="num" id="tb-pnl">—</span>
     <span class="pv" id="tb-pos">0 positions</span>
   </div>
-  <button id="auto-btn" class="off" onclick="toggleAutoTrade()">AUTO OFF</button>
+  <!-- Bot always-on status chip (no toggle) -->
+  <span id="bot-status" class="bot-idle">BOT OFFLINE</span>
 </div>
 
 <!-- ═══ LAYOUT ════════════════════════════════════════════════════════════ -->
@@ -28,7 +29,7 @@
   <!-- Left panel: watchlist + search -->
   <div id="left-panel">
     <div id="search-box">
-      <input id="search-input" type="text" placeholder="Search NSE stocks…"
+      <input id="search-input" type="text" placeholder="Search all NSE stocks…"
              oninput="onSearchInput(this.value)" onblur="onSearchBlur()">
       <div id="search-results"></div>
     </div>
@@ -41,10 +42,11 @@
 
     <!-- Tab bar -->
     <div id="tabs">
-      <div class="tab active"  onclick="switchTab('screener')">Screener</div>
-      <div class="tab"         onclick="switchTab('portfolio')">Portfolio</div>
-      <div class="tab"         onclick="switchTab('trades')">Trades</div>
-      <div class="tab"         onclick="switchTab('news')">News</div>
+      <div class="tab active" onclick="switchTab('screener')">Screener</div>
+      <div class="tab"        onclick="switchTab('botlog')">Bot Log</div>
+      <div class="tab"        onclick="switchTab('portfolio')">Portfolio</div>
+      <div class="tab"        onclick="switchTab('trades')">Trades</div>
+      <div class="tab"        onclick="switchTab('news')">News</div>
     </div>
 
     <div id="tab-content">
@@ -64,9 +66,9 @@
         </div>
 
         <div id="screener-bar">
-          <span class="section-title" style="margin:0">Top Momentum Stocks</span>
+          <span class="section-title" style="margin:0">All NSE Stocks — Ranked by Momentum</span>
           <span id="screener-status" class="neu">Loading…</span>
-          <button id="scan-btn" onclick="triggerScan()">Refresh Scan</button>
+          <button id="scan-btn" onclick="triggerScan()">Refresh</button>
         </div>
 
         <table class="data-table">
@@ -77,14 +79,36 @@
               <th>Company</th>
               <th class="r">Price</th>
               <th class="r">Chg%</th>
-              <th class="r">Vol Ratio</th>
-              <th class="r">VWAP</th>
+              <th class="r">Vol</th>
+              <th class="r">VWAP ↑↓</th>
               <th class="r">RSI</th>
-              <th>OR Breakout</th>
+              <th>OR Break</th>
               <th>Signal</th>
+              <th class="r">Score</th>
             </tr>
           </thead>
           <tbody id="screener-body"></tbody>
+        </table>
+      </div>
+
+      <!-- ── BOT LOG ── -->
+      <div id="tab-botlog" class="tab-pane">
+        <div class="section-title" style="margin-bottom:12px">
+          Bot Decision Log — every stock evaluated each cycle
+        </div>
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Symbol</th>
+              <th class="r">Price</th>
+              <th class="r">Score</th>
+              <th class="r">P&amp;L</th>
+              <th>Reasoning</th>
+            </tr>
+          </thead>
+          <tbody id="bot-log-body"></tbody>
         </table>
       </div>
 
@@ -140,7 +164,6 @@
 
 <div id="toast-container"></div>
 
-<!-- Pass server-side config into JS scope -->
 <script>
   const INITIAL_CAP = {{ initial_cap }};
 </script>
