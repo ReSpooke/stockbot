@@ -27,6 +27,15 @@ function badgeClass(signal) {
   return 'badge-hold';
 }
 
+/**
+ * info(tip, pos) → HTML for a hoverable ⓘ icon with an explanatory tooltip.
+ * pos: '' | 'tip-below' | 'tip-left' to control tooltip placement near edges.
+ */
+function info(tip, pos = '') {
+  const safe = String(tip).replace(/"/g, '&quot;');
+  return `<i class="info ${pos}" data-tip="${safe}">i</i>`;
+}
+
 /* ── Clock ───────────────────────────────────────────────────────────────── */
 
 function renderClock() {
@@ -199,8 +208,9 @@ function showIntradayError(sym) {
 /* ── Portfolio ───────────────────────────────────────────────────────────── */
 
 function renderPortfolioBar(d) {
+  // Top bar shows total portfolio value + net gain/loss vs starting capital
   const pnl = d.total_pnl || 0;
-  const pc  = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+  const pc  = signClass(pnl);
   const sg  = signStr(pnl);
 
   document.getElementById('tb-total').innerHTML = rupee(d.total_value);
@@ -212,29 +222,35 @@ function renderPortfolioBar(d) {
 }
 
 function renderPortfolioTab(d, initialCap) {
-  const pnl = d.total_pnl || 0;
-  const pc  = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-  const sg  = signStr(pnl);
+  // Use initial_capital from server (accurate) or fall back to template value
+  const startingCap = d.initial_capital || initialCap;
+  const totalPnl    = d.total_pnl || 0;
+  const unrPnl      = d.unrealised_pnl != null ? d.unrealised_pnl : null;
+  const tpc = signClass(totalPnl);
+  const tsg = signStr(totalPnl);
+  const upc = unrPnl != null ? signClass(unrPnl) : '';
+  const usg = unrPnl != null ? signStr(unrPnl)   : '';
 
   document.getElementById('pf-cards').innerHTML = `
     <div class="pf-card">
-      <div class="label">Total Value</div>
+      <div class="label">Total Portfolio Value ${info('Everything you own: available cash plus the current market value of all held stocks. This is your account worth right now.')}</div>
       <div class="value">${rupee(d.total_value)}</div>
-      <div class="sub ${pc}">${sg}${rupee(Math.abs(pnl))} (${sg}${fmt(d.total_pnl_pct)}%)</div>
+      <div class="sub" style="color:var(--dim)">Cash ${rupee(d.cash)} + Stocks ${rupee(d.market_value)}</div>
     </div>
     <div class="pf-card">
-      <div class="label">Available Cash</div>
+      <div class="label">Net Gain / Loss ${info('How much you are up or down overall since the starting capital. = Total Value − Starting Capital. Includes both booked profits and current open positions.')}</div>
+      <div class="value ${tpc}">${tsg}${rupee(Math.abs(totalPnl))}</div>
+      <div class="sub">Started at ${rupee(startingCap)} · ${tsg}${fmt(d.total_pnl_pct)}%</div>
+    </div>
+    <div class="pf-card">
+      <div class="label">Available Cash ${info('Money not currently invested in any stock — free to deploy on the next BUY.')}</div>
       <div class="value">${rupee(d.cash)}</div>
+      <div class="sub" style="color:var(--dim)">${d.n_positions || 0} position(s) · ${rupee(d.market_value)} invested</div>
     </div>
     <div class="pf-card">
-      <div class="label">Market Value</div>
-      <div class="value">${rupee(d.market_value)}</div>
-      <div class="sub">${d.n_positions || 0} position(s)</div>
-    </div>
-    <div class="pf-card">
-      <div class="label">Unrealised P&amp;L</div>
-      <div class="value ${pc}">${sg}${rupee(Math.abs(pnl))}</div>
-      <div class="sub">Starting: ${rupee(initialCap)}</div>
+      <div class="label">Unrealised P&amp;L ${info('Paper profit/loss on stocks you still hold: if you sold everything right now, this is what you would gain or lose on top of cash. Becomes "realised" once sold.')}</div>
+      <div class="value ${upc}">${unrPnl != null ? usg + rupee(Math.abs(unrPnl)) : '₹0.00'}</div>
+      <div class="sub" style="color:var(--dim)">Across ${d.n_positions || 0} open position(s)</div>
     </div>`;
 
   const pos   = d.positions || [];
@@ -433,15 +449,15 @@ function renderBotPerformance(data) {
     el.innerHTML = `
       <div class="perf-stats">
         <div class="perf-card">
-          <div class="perf-label">Entry Threshold</div>
+          <div class="perf-label">Entry Threshold ${info('Minimum score a stock needs before the bot will BUY it (out of ~13). Lower = trades more often; higher = pickier. The bot moves this automatically based on its win rate.')}</div>
           <div class="perf-value" style="color:${bm0Col}">${bm0} / 13</div>
         </div>
         <div class="perf-card">
-          <div class="perf-label">Closed Trades</div>
+          <div class="perf-label">Closed Trades ${info('How many BUY→SELL round-trips have completed. The bot needs at least 3 to start measuring its win rate.')}</div>
           <div class="perf-value" style="color:var(--dim)">${data ? data.n_trades : 0}</div>
         </div>
         <div class="perf-card wide">
-          <div class="perf-label">Status</div>
+          <div class="perf-label">Status ${info('What the bot has concluded from its recent performance and how it adjusted its strategy.')}</div>
           <div style="font-size:12px;color:var(--text);margin-top:4px">${msg0}</div>
         </div>
       </div>
@@ -470,18 +486,18 @@ function renderBotPerformance(data) {
   el.innerHTML = `
     <div class="perf-stats">
       <div class="perf-card">
-        <div class="perf-label">Win Rate (${data.n_trades} trades)</div>
+        <div class="perf-label">Win Rate (${data.n_trades} trades) ${info('Percent of closed trades that ended in profit. Above 50% means more winners than losers.')}</div>
         <div class="perf-value ${wrCls}">${wr}</div>
       </div>
       <div class="perf-card">
-        <div class="perf-label">Entry Threshold</div>
+        <div class="perf-label">Entry Threshold ${info('Minimum score needed to BUY. The bot lowers it when winning (≥65%) and raises it when losing (<35%) to protect capital.')}</div>
         <div class="perf-value" style="color:${bmCol}">${bm} / 13</div>
       </div>
       <div class="perf-card wide">
-        <div class="perf-label">What bot learned</div>
+        <div class="perf-label">What bot learned ${info('The bot\'s own summary of its recent results and the strategy adjustment it made.')}</div>
         <div style="font-size:12px;color:var(--text);margin-top:4px">${data.message || ''}</div>
       </div>
     </div>
-    ${sigRows ? `<div class="sig-section"><div class="section-title" style="margin-bottom:8px">Signal Accuracy</div>${sigRows}</div>` : ''}
+    ${sigRows ? `<div class="sig-section"><div class="section-title" style="margin-bottom:8px">Signal Accuracy ${info('For each indicator, the win rate of trades where that signal fired. Green bars = reliable signals today; red = currently misleading. Shown as wins/total.')}</div>${sigRows}</div>` : ''}
   `;
 }

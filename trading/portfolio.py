@@ -45,18 +45,36 @@ def summary(current_prices: dict[str, float]) -> dict:
             "pnl_pct":      round(pnl_pct, 2),
         })
 
+    # Unrealised P&L = sum of open position gains/losses only
+    unrealised_pnl = sum(p["unrealised_pnl"] for p in pos_list)
+
+    # Starting capital stored in DB settings so it doesn't drift with config changes.
+    # If not yet stored (first run) we write it now.
+    stored_initial = db.get_setting("initial_capital")
+    if stored_initial:
+        initial_capital = float(stored_initial)
+    else:
+        initial_capital = cash + sum(
+            float(pos["avg_cost"]) * float(pos["quantity"])
+            for pos in positions.values()
+        )
+        # Approximate: current total value is our baseline on first read
+        db.set_setting("initial_capital", str(round(initial_capital, 2)))
+
     total_value   = cash + market_value
-    total_pnl     = total_value - config.INITIAL_CAPITAL
-    total_pnl_pct = (total_pnl / config.INITIAL_CAPITAL) * 100 if config.INITIAL_CAPITAL else 0
+    total_pnl     = total_value - initial_capital
+    total_pnl_pct = (total_pnl / initial_capital) * 100 if initial_capital else 0
 
     return {
-        "cash":           round(cash, 2),
-        "market_value":   round(market_value, 2),
-        "total_value":    round(total_value, 2),
-        "total_pnl":      round(total_pnl, 2),
-        "total_pnl_pct":  round(total_pnl_pct, 2),
-        "positions":      pos_list,
-        "n_positions":    len(pos_list),
+        "cash":            round(cash, 2),
+        "market_value":    round(market_value, 2),
+        "total_value":     round(total_value, 2),
+        "initial_capital": round(initial_capital, 2),
+        "total_pnl":       round(total_pnl, 2),
+        "total_pnl_pct":   round(total_pnl_pct, 2),
+        "unrealised_pnl":  round(unrealised_pnl, 2),
+        "positions":       pos_list,
+        "n_positions":     len(pos_list),
     }
 
 

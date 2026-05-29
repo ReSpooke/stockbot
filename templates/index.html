@@ -17,11 +17,17 @@
   <div id="market-badges" style="display:flex;gap:6px"></div>
   <div class="spacer"></div>
   <div id="portfolio-bar">
-    <span><span class="pv">Portfolio</span> <span class="num" id="tb-total">₹—</span></span>
+    <span>
+      <span class="pv">Portfolio</span>
+      <span class="num" id="tb-total">₹—</span>
+      <i class="info tip-below" data-tip="Total value of everything you own right now: available cash plus the current market value of all held stocks.">i</i>
+    </span>
     <span class="num" id="tb-pnl">—</span>
+    <i class="info tip-below" data-tip="Net gain or loss since the bot started, in rupees and percent. Green = profit, red = loss.">i</i>
     <span class="pv" id="tb-pos">0 positions</span>
   </div>
   <span id="bot-status" class="bot-idle">BOT OFFLINE</span>
+  <i class="info tip-below tip-left" data-tip="BOT ACTIVE = trading live (9:15 AM–3:15 PM IST). BOT OFFLINE = market closed. The bot scans all NSE stocks every 5 minutes and trades automatically.">i</i>
 </div>
 
 <!-- ═══ LAYOUT ════════════════════════════════════════════════════════════ -->
@@ -34,7 +40,10 @@
              oninput="onSearchInput(this.value)" onblur="onSearchBlur()">
       <div id="search-results"></div>
     </div>
-    <div id="watchlist-header">Watchlist</div>
+    <div id="watchlist-header">
+      Watchlist
+      <i class="info tip-below" data-tip="A fixed set of large stocks shown with live prices. Click any to see its chart and details. The bot itself trades the full NSE universe, not just these.">i</i>
+    </div>
     <div id="watchlist"></div>
   </div>
 
@@ -56,8 +65,8 @@
         <div class="page-desc">
           All NSE stocks scanned every 5 min and ranked by intraday activity.
           <strong>Left columns</strong> = live market data.&nbsp;
-          <strong>Right columns (Bot Score, Confidence, Decision)</strong> = what the bot calculated — scores ≥5 trigger a BUY, ≤−3 trigger a SELL for held positions.
-          Click any row to see full intraday detail and manually trade.
+          <strong>Right columns (Score, Confidence, Decision)</strong> = what the bot calculated — scores ≥5 trigger a BUY, ≤−3 trigger a SELL for held positions.
+          Click any row to see its chart and trade manually.
         </div>
 
         <div id="intraday-detail">
@@ -68,7 +77,6 @@
             <button class="action-btn btn-sell" onclick="manualTrade('sell')">SELL</button>
             <button class="action-btn btn-sq"   onclick="squareOff()" style="float:right">Square Off All</button>
           </div>
-          <!-- Candlestick chart (loads when stock is selected) -->
           <div id="stock-chart" style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px"></div>
           <div style="font-size:10px;color:var(--dim);margin-top:4px">
             Candlestick · VWAP (dashed orange) · ▲ Bot BUY · ▼ Bot SELL
@@ -84,21 +92,21 @@
         <table class="data-table">
           <thead>
             <tr>
-              <th colspan="7" class="col-group-actual">— Live Market Data —</th>
-              <th colspan="4" class="col-group-bot">— Bot Analysis —</th>
+              <th colspan="8" class="col-group-actual">— Live Market Data —</th>
+              <th colspan="3" class="col-group-bot">— Bot Analysis —</th>
             </tr>
             <tr>
               <th>#</th>
               <th>Symbol</th>
-              <th class="r">Price</th>
-              <th class="r">Chg%</th>
-              <th class="r">Vol</th>
-              <th class="r">VWAP</th>
-              <th class="r">RSI</th>
-              <th>OR Break</th>
-              <th class="r">Score</th>
-              <th>Confidence</th>
-              <th>Decision</th>
+              <th class="r">Price<i class="info tip-below" data-tip="Last traded price of the stock (LTP).">i</i></th>
+              <th class="r">Chg%<i class="info tip-below" data-tip="Percent change versus yesterday's closing price.">i</i></th>
+              <th class="r">Vol<i class="info tip-below" data-tip="Volume ratio: today's trading volume vs the recent average. Above 1× = unusually active.">i</i></th>
+              <th class="r">VWAP<i class="info tip-below" data-tip="Volume Weighted Average Price — the average price weighted by volume. Price above VWAP (↑) is bullish; below (↓) is bearish.">i</i></th>
+              <th class="r">RSI<i class="info tip-below" data-tip="Relative Strength Index (0–100). Below 38 = oversold (may bounce up); above 72 = overbought (may fall). 38–55 is the healthy buy zone.">i</i></th>
+              <th>OR Break<i class="info tip-below" data-tip="Opening Range breakout. Price above the first 15 min high = bullish; below the low = bearish; otherwise inside.">i</i></th>
+              <th class="r">Score<i class="info tip-below tip-left" data-tip="Bot's total score from 7 factors (range roughly −13 to +13). ≥5 triggers a BUY; ≤−3 triggers a SELL for stocks the bot holds.">i</i></th>
+              <th>Conf.<i class="info tip-below tip-left" data-tip="Confidence in the decision: HIGH (|score|≥8), MEDIUM (≥6), LOW. Higher confidence = bigger position size.">i</i></th>
+              <th>Decision<i class="info tip-below tip-left" data-tip="The bot's call right now: BUY, SELL, or HOLD. Rows the bot currently holds are marked with a green ●.">i</i></th>
             </tr>
           </thead>
           <tbody id="screener-body"></tbody>
@@ -109,20 +117,18 @@
       <div id="tab-botlog" class="tab-pane">
         <div class="page-desc">
           The bot's thinking — every stock evaluated each 5-min cycle.
-          <strong>Score</strong> is the sum of 7 factors (OR breakout, VWAP, RSI, MACD, Volume, Momentum, Time).
-          <strong>✓ rows</strong> = a trade was actually executed.
-          If a BUY shows "Skipped" in Reasoning, it means the bot liked it but already held max positions or had insufficient cash.
+          <strong>✓</strong> = a trade was actually executed. "skip" = the bot wanted to trade but couldn't (max positions or low cash).
         </div>
         <table class="data-table">
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Action</th>
+              <th>Time<i class="info tip-below" data-tip="When (IST) this decision was made during the scan cycle.">i</i></th>
+              <th>Action<i class="info tip-below" data-tip="What the bot decided. A ✓ means it was actually executed. '(skip)' means it wanted to but couldn't. SELL labels show the exit reason.">i</i></th>
               <th>Symbol</th>
               <th class="r">Price</th>
-              <th class="r">Score</th>
-              <th class="r">P&amp;L</th>
-              <th>Reasoning (why the bot decided this)</th>
+              <th class="r">Score<i class="info tip-below" data-tip="Sum of 7 scoring factors. Green ≥5 = buy zone, red ≤−3 = sell zone.">i</i></th>
+              <th class="r">P&amp;L<i class="info tip-below" data-tip="For SELL actions only: realised profit or loss from that trade.">i</i></th>
+              <th>Reasoning<i class="info tip-below tip-left" data-tip="Plain-English breakdown of which factors contributed to the score and by how much.">i</i></th>
             </tr>
           </thead>
           <tbody id="bot-log-body"></tbody>
@@ -133,11 +139,9 @@
       <div id="tab-learning" class="tab-pane">
         <div class="page-desc">
           The bot learns from its own trade history.
-          After each closed trade it measures which signal combinations produced wins or losses,
+          After each closed trade it measures which signals produced wins or losses,
           then automatically adjusts its <strong>entry threshold</strong> (how strict it is before buying).
-          <strong>Win rate ≥ 65%</strong> → lowers threshold (trade more aggressively).
-          <strong>Win rate &lt; 35%</strong> → raises threshold (near-stop conservative mode).
-          <strong>Signal accuracy bars</strong> show which indicators are actually working today.
+          Win rate ≥ 65% → trades more aggressively. Win rate &lt; 35% → turns conservative.
         </div>
         <div id="bot-perf-panel">
           <div class="perf-msg">Loading performance data…</div>
@@ -152,17 +156,20 @@
           Positions are automatically closed at <strong>1.5% stop-loss</strong>, <strong>3% take-profit</strong>, or at <strong>3:15 PM</strong> (EOD square-off) — whichever comes first.
         </div>
         <div class="pf-cards" id="pf-cards"></div>
-        <div class="section-title">Open Positions</div>
+        <div class="section-title">
+          Open Positions
+          <i class="info" data-tip="Stocks the bot is holding right now. Each updates live every 5 seconds.">i</i>
+        </div>
         <table class="data-table">
           <thead>
             <tr>
               <th>Symbol</th>
-              <th class="r">Qty</th>
-              <th class="r">Entry Price</th>
-              <th class="r">Current Price</th>
-              <th class="r">Value</th>
-              <th class="r">Unrealised P&amp;L</th>
-              <th class="r">P&amp;L %</th>
+              <th class="r">Qty<i class="info tip-below" data-tip="Number of shares held.">i</i></th>
+              <th class="r">Entry Price<i class="info tip-below" data-tip="Average price the bot paid to buy these shares.">i</i></th>
+              <th class="r">Current Price<i class="info tip-below" data-tip="Latest market price. ⟳ means the price is still being fetched.">i</i></th>
+              <th class="r">Value<i class="info tip-below" data-tip="Current market value of this holding (Qty × Current Price).">i</i></th>
+              <th class="r">Unrealised P&amp;L<i class="info tip-below tip-left" data-tip="Paper profit/loss: (Current Price − Entry Price) × Qty. 'Unrealised' because you still hold the shares — it becomes real only when sold.">i</i></th>
+              <th class="r">P&amp;L %<i class="info tip-below tip-left" data-tip="Unrealised profit/loss as a percentage of what you paid.">i</i></th>
             </tr>
           </thead>
           <tbody id="positions-body"></tbody>
@@ -176,21 +183,19 @@
       <!-- ── TRADES ── -->
       <div id="tab-trades" class="tab-pane">
         <div class="page-desc">
-          All trades the bot executed today.
-          <strong>P&amp;L</strong> is shown for closed (SELL) trades only — it is the profit or loss relative to the entry price.
-          The bot targets +3% profit and cuts at −1.5% loss. After 2:30 PM it exits profitable positions early to avoid overnight risk.
+          Every trade the bot executed. Each BUY opens a position; the matching SELL closes it and locks in the P&amp;L.
         </div>
         <table class="data-table">
           <thead>
             <tr>
               <th>Symbol</th>
-              <th>Side</th>
+              <th>Side<i class="info tip-below" data-tip="BUY = opened a position. SELL = closed it.">i</i></th>
               <th class="r">Qty</th>
-              <th class="r">Price</th>
-              <th class="r">Total Value</th>
-              <th class="r">Realised P&amp;L</th>
-              <th>Why Bot Acted</th>
-              <th>Time</th>
+              <th class="r">Price<i class="info tip-below" data-tip="Price per share at which the trade executed.">i</i></th>
+              <th class="r">Total Value<i class="info tip-below" data-tip="Qty × Price — the total rupees moved in this trade.">i</i></th>
+              <th class="r">Realised P&amp;L<i class="info tip-below tip-left" data-tip="Actual locked-in profit/loss. Only shown on SELL rows (a BUY has no P&L until it's sold).">i</i></th>
+              <th>Why Bot Acted<i class="info tip-below tip-left" data-tip="The reason the bot gave for this trade — its score and the top contributing signals.">i</i></th>
+              <th>Time<i class="info tip-below tip-left" data-tip="When the trade executed, shown in IST.">i</i></th>
             </tr>
           </thead>
           <tbody id="trades-body"></tbody>
@@ -200,10 +205,9 @@
       <!-- ── NEWS ── -->
       <div id="tab-news" class="tab-pane">
         <div class="page-desc">
-          Latest news for your watchlist stocks.
-          <strong>Green ▲</strong> = positive sentiment (may support a BUY).
-          <strong>Red ▼</strong> = negative sentiment (may reinforce a SELL).
-          Sentiment scores range from −1 (very negative) to +1 (very positive).
+          Latest news for watchlist stocks.
+          <strong>Green ▲</strong> = positive sentiment, <strong>Red ▼</strong> = negative.
+          Sentiment ranges from −1 (very negative) to +1 (very positive).
         </div>
         <div id="news-list"></div>
       </div>
