@@ -17,7 +17,11 @@ from flask import Flask, jsonify, render_template, redirect, request, url_for
 import config
 from database import db
 from data import stock_data, news_scraper
-from data.nse_stocks import screen_all, screen_top, search as nse_search
+from data.nse_stocks import screen_all, screen_top, search as nse_search, NIFTY_50, ALL_SYMBOLS
+
+# On Render free tier, alternate: Nifty 50 every cycle, full universe every 3rd cycle
+_IS_RENDER    = bool(os.getenv("RENDER"))
+_scan_counter = 0
 from analysis import signals as sig_gen
 from analysis import sentiment as sent
 from analysis.intraday import intraday_snapshot, intraday_signal
@@ -154,9 +158,17 @@ def _background_intraday_scan() -> None:
             _intraday["scan_started"] = now.strftime("%H:%M:%S")
 
         try:
-            all_results = screen_all()           # scan every stock in UNIVERSE
+            global _scan_counter
+            _scan_counter += 1
+            # On Render free tier: scan Nifty 50 every cycle, full universe every 3rd
+            # Locally: always scan everything
+            if _IS_RENDER and (_scan_counter % 3 != 0):
+                universe = NIFTY_50
+            else:
+                universe = ALL_SYMBOLS
+            all_results = screen_all(universe=universe)
             elapsed = time.monotonic() - t0
-            log.info("[Bot] Scan done in %.1fs — %d stocks", elapsed, len(all_results))
+            log.info("[Bot] Scan done in %.1fs — %d/%d stocks", elapsed, len(all_results), len(universe))
 
             if not squared_off:
                 enriched = _run_decision_cycle(all_results, now.hour, now.minute)
@@ -366,14 +378,41 @@ def _background_keepalive() -> None:
 
 
 
+def _delayed(fn, delay_secs: int):
+    """Wrap a thread target with a startup delay to stagger memory spikes."""
+    def _wrapper():
+        time.sleep(delay_secs)
+        fn()
+    return _wrapper
+
+
 def _start_background_threads() -> None:
-    for fn in (_background_news_refresh, _background_price_refresh,
-               _background_intraday_scan, _background_squareoff_watch,
-               _background_keepalive):
-        threading.Thread(target=fn, daemon=True).start()
+    """
+    Start background threads with staggered delays so they don't all spike
+    memory at the same time (critical on Render's 512 MB free tier).
+
+    Schedule:
+      0 s  — squareoff watcher (lightweight, polling only)
+      10 s — price refresh
+      20 s — news refresh
+      40 s — intraday scan (heaviest — 150 yfinance calls)
+      60 s — keepalive ping
+    """
+    schedule = [
+        (_background_squareoff_watch, 0),
+        (_background_price_refresh,   10),
+        (_background_news_refresh,    20),
+        (_background_intraday_scan,   40),
+        (_background_keepalive,       60),
+    ]
+    for fn, delay in schedule:
+        target = _delayed(fn, delay) if delay > 0 else fn
+        threading.Thread(target=target, daemon=True).start()
 
 
 def _maybe_train_ml() -> None:
+    """Train ML model in background, but wait 90 s so the server is stable first."""
+    time.sleep(90)
     from analysis import ml_model
     if not ml_model.is_trained():
         log.info("[ML] Model not found — training on startup (takes ~2 min)…")

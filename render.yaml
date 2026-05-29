@@ -5,7 +5,8 @@ services:
     region: singapore       # closest free region to India
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    # gunicorn: single worker (threads share background threads safely), 2-min timeout
+    startCommand: gunicorn "app:create_app()" --workers 1 --threads 4 --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --log-level info
     envVars:
       - key: WEB_HOST
         value: 0.0.0.0
@@ -16,6 +17,6 @@ services:
       - key: WEB_DEBUG
         value: "false"
       - key: WEB_SECRET
-        generateValue: true   # Render auto-generates a secure secret
+        generateValue: true
       - key: INITIAL_CAPITAL
-        value: "100000"
+        value: "20000"
