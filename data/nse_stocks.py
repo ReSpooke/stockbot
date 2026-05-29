@@ -104,8 +104,9 @@ for sym, name in _UNIVERSE:
         _SEEN.add(sym)
         UNIVERSE.append((sym, name))
 
-ALL_SYMBOLS  = [s for s, _ in UNIVERSE]
-_NAME_MAP    = {s: n for s, n in UNIVERSE}
+ALL_SYMBOLS   = [s for s, _ in UNIVERSE]
+NIFTY_50      = ALL_SYMBOLS[:50]   # first 50 entries = Nifty 50 index
+_NAME_MAP     = {s: n for s, n in UNIVERSE}
 
 
 def get_name(symbol: str) -> str:
@@ -130,8 +131,8 @@ def _score_one(sym: str) -> dict | None:
     """Fetch today's 5-min data for sym and compute a quick momentum score."""
     try:
         yf_sym = sym + ".NS"
-        df = yf.Ticker(yf_sym).history(period="2d", interval="5m", auto_adjust=True)
-        if df is None or len(df) < 10:
+        df = yf.Ticker(yf_sym).history(period="5d", interval="5m", auto_adjust=True)
+        if df is None or df.empty:
             return None
 
         # Today's bars only
@@ -142,12 +143,17 @@ def _score_one(sym: str) -> dict | None:
         if len(today_df) < 3:
             return None
 
-        prev_close = float(df[df.index.date < today]["Close"].iloc[-1]) if any(df.index.date < today) else None
+        prev_df    = df[df.index.date < today]
+        # Use last yesterday close; fall back to today's open bar if no prev data
+        if not prev_df.empty:
+            prev_close = float(prev_df["Close"].iloc[-1])
+        else:
+            prev_close = float(today_df["Open"].iloc[0])
         last_price = float(today_df["Close"].iloc[-1])
-        pct_chg    = ((last_price - prev_close) / prev_close * 100) if prev_close else 0
+        pct_chg    = (last_price - prev_close) / prev_close * 100
 
-        # Volume ratio vs yesterday average
-        avg_vol = float(df[df.index.date < today]["Volume"].mean()) if any(df.index.date < today) else 1
+        # Volume ratio vs yesterday average (full-day)
+        avg_vol = float(prev_df["Volume"].mean()) if not prev_df.empty else float(today_df["Volume"].mean())
         today_vol = float(today_df["Volume"].sum())
         # Scale: full day = ~75 bars of 5min; today_df may have fewer bars
         bars_pct  = len(today_df) / 75
@@ -164,11 +170,15 @@ def _score_one(sym: str) -> dict | None:
         vwap_val = float(typical_vol.sum() / cum_vol) if cum_vol > 0 else last_price
         above_vwap = last_price > vwap_val
 
-        # RSI (14-period on 5-min bars)
-        delta = closes.diff()
-        avg_gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
-        avg_loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
-        rsi_val = float(100 - 100 / (1 + avg_gain / avg_loss)) if avg_loss else 50.0
+        # RSI — use min(14, half of available bars) so it works early in the day
+        rsi_period = max(3, min(14, len(closes) // 2))
+        delta      = closes.diff()
+        avg_gain   = delta.clip(lower=0).rolling(rsi_period).mean().iloc[-1]
+        avg_loss   = (-delta.clip(upper=0)).rolling(rsi_period).mean().iloc[-1]
+        if pd.isna(avg_gain) or pd.isna(avg_loss) or avg_loss == 0:
+            rsi_val = 50.0
+        else:
+            rsi_val = float(100 - 100 / (1 + avg_gain / avg_loss))
 
         # MACD histogram
         macd_line  = closes.ewm(span=12, adjust=False).mean() - closes.ewm(span=26, adjust=False).mean()
@@ -208,12 +218,12 @@ def _score_one(sym: str) -> dict | None:
 
 def screen_top(n: int = 15, universe: list[str] = None) -> list[dict]:
     """
-    Scan all Nifty 500 stocks and return top-n by intraday momentum.
-    Uses ThreadPoolExecutor for speed (~10-15s for full scan).
+    Scan NSE stocks and return top-n by intraday momentum.
+    Default universe is Nifty 50 (fast ~15s). Pass ALL_SYMBOLS for full scan.
     """
-    syms = universe or ALL_SYMBOLS
+    syms = universe or NIFTY_50
     results = []
-    with ThreadPoolExecutor(max_workers=30) as pool:
+    with ThreadPoolExecutor(max_workers=15) as pool:
         futures = {pool.submit(_score_one, s): s for s in syms}
         for fut in as_completed(futures):
             r = fut.result()

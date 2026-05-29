@@ -210,8 +210,17 @@ init();
 // Polling intervals
 setInterval(loadMarketStatus, 30_000);
 setInterval(loadWatchlist,    15_000);
-setInterval(loadScreener,     30_000);
 setInterval(loadPortfolio,    20_000);
+
+// Screener: poll every 10s while scanning, every 30s once stable
+let _screenerInterval = null;
+function _startScreenerPolling() {
+  if (_screenerInterval) clearInterval(_screenerInterval);
+  _screenerInterval = setInterval(async () => {
+    await loadScreener();
+  }, 10_000);
+}
+_startScreenerPolling();
 setInterval(syncAutoState,    60_000);
 setInterval(() => {
   if (document.getElementById('tab-news').classList.contains('active')) loadNews();

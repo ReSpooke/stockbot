@@ -52,7 +52,8 @@ _intraday = {
     "daily_pnl":     0.0,       # realised P&L today (₹)
     "trades_today":  0,
     "squared_off":   False,     # True after EOD square-off
-    "scan_status":   "idle",    # idle | scanning | done
+    "scan_status":   "idle",    # idle | scanning | done | error
+    "scan_started":  None,      # ISO timestamp when current scan started
 }
 _intraday_lock = threading.Lock()
 
@@ -122,23 +123,27 @@ def _background_price_refresh() -> None:
 
 
 def _background_intraday_scan() -> None:
-    """Every SCAN_INTERVAL_SECS: screen top stocks + auto-trade if enabled."""
+    """Every SCAN_INTERVAL_SECS: screen Nifty 50 + auto-trade if enabled."""
     while True:
         if not _is_trading_hours():
             time.sleep(30)
             continue
 
+        scan_start = time.monotonic()
         with _intraday_lock:
             enabled     = _intraday["enabled"]
             squared_off = _intraday["squared_off"]
-            _intraday["scan_status"] = "scanning"
+            _intraday["scan_status"]  = "scanning"
+            _intraday["scan_started"] = datetime.now().strftime("%H:%M:%S")
 
         try:
-            top = screen_top(n=20)
+            top = screen_top(n=20)   # scans Nifty 50 by default (~15s)
+            elapsed = time.monotonic() - scan_start
             with _intraday_lock:
                 _intraday["scan_results"] = top
                 _intraday["last_scan"]    = datetime.now().strftime("%H:%M:%S")
                 _intraday["scan_status"]  = "done"
+            log.info("[Screener] Scan done in %.1fs — %d results", elapsed, len(top))
 
             if enabled and not squared_off:
                 _execute_intraday_trades(top)
@@ -152,7 +157,10 @@ def _background_intraday_scan() -> None:
 
 
 def _execute_intraday_trades(top_stocks: list) -> None:
-    """Auto-buy top BUY signals and auto-sell stale positions."""
+    """
+    Auto-trade using screener results directly — no extra yfinance calls.
+    Each item already has price, signal, vwap, rsi from the screener scan.
+    """
     with _intraday_lock:
         daily_pnl = _intraday["daily_pnl"]
 
@@ -161,31 +169,33 @@ def _execute_intraday_trades(top_stocks: list) -> None:
         return
 
     positions  = pf.get_positions()
-    prices_now = {}
+    prices_now = {item["symbol"]: item["price"] for item in top_stocks if item.get("price")}
+
+    cash = pf.get_cash()
 
     for item in top_stocks[:10]:
-        sym  = item["symbol"]
-        snap = intraday_snapshot(sym)
-        if not snap:
+        sym    = item["symbol"]
+        price  = item.get("price")
+        signal = item.get("signal", "HOLD")
+
+        if not price:
             continue
-        prices_now[sym] = snap["price"]
-        signal = intraday_signal(snap)
 
         if signal == "BUY" and sym not in positions:
             if len(positions) >= config.MAX_INTRADAY_POS:
-                continue
-            price = snap["price"]
-            cash  = pf.get_cash()
-            qty   = max(1, int(cash * config.INTRADAY_QTY_PCT / price))
-            r = executor.buy(sym, price, f"AutoIntraday: score={item['score']}")
+                log.debug("[AutoTrade] Max positions reached, skipping %s", sym)
+                break
+            qty = max(1, int(cash * config.INTRADAY_QTY_PCT / price))
+            r   = executor.buy(sym, price, f"Auto: {signal} score={item.get('score',0):.2f}")
             if r.get("ok"):
+                cash -= qty * price   # update local cash estimate
+                positions[sym] = True  # mark as held to prevent double-buy
                 with _intraday_lock:
                     _intraday["trades_today"] += 1
                 log.info("[AutoTrade] BUY %s %d @ %.2f", sym, qty, price)
 
         elif signal == "SELL" and sym in positions:
-            price = snap["price"]
-            r = executor.sell(sym, price, "AutoIntraday: SELL signal")
+            r = executor.sell(sym, price, f"Auto: {signal} score={item.get('score',0):.2f}")
             if r.get("ok"):
                 pnl = r.get("pnl", 0) or 0
                 with _intraday_lock:
@@ -193,6 +203,7 @@ def _execute_intraday_trades(top_stocks: list) -> None:
                     _intraday["trades_today"] += 1
                 log.info("[AutoTrade] SELL %s @ %.2f  P&L=%.2f", sym, price, pnl)
 
+    # SL/TP check uses prices already fetched by the screener — no extra calls
     executor.check_stop_loss_take_profit(prices_now)
 
 
@@ -501,15 +512,18 @@ def _run_analysis_bg(symbols: list) -> None:
 
 @app.route("/api/screener")
 def api_screener():
-    """Return top 20 NSE stocks by intraday momentum (cached from last scan)."""
+    """Return top 20 Nifty 50 stocks by intraday momentum (cached from last scan)."""
     with _intraday_lock:
-        results    = list(_intraday["scan_results"])
-        last_scan  = _intraday["last_scan"]
-        scan_status= _intraday["scan_status"]
+        results      = list(_intraday["scan_results"])
+        last_scan    = _intraday["last_scan"]
+        scan_status  = _intraday["scan_status"]
+        scan_started = _intraday["scan_started"]
     return jsonify({
-        "results":    results,
-        "last_scan":  last_scan,
-        "status":     scan_status,
+        "results":       results,
+        "last_scan":     last_scan,
+        "scan_status":   scan_status,
+        "scan_started":  scan_started,
+        "market_open":   _nse_market_open(),
         "trading_hours": _is_trading_hours(),
     })
 

@@ -91,26 +91,32 @@ function hideSearchResults() {
 /* ── Screener ────────────────────────────────────────────────────────────── */
 
 function renderScreener(data) {
-  const items = data.results || [];
+  const items  = data.results || [];
   const status = document.getElementById('screener-status');
 
   if (data.scan_status === 'scanning') {
-    status.textContent = 'Scanning…';
+    const since = data.scan_started ? ` (started ${data.scan_started})` : '';
+    status.textContent = `Scanning Nifty 50…${since}`;
+  } else if (data.scan_status === 'error') {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Scan error — will retry in 5 min';
   } else if (data.last_scan) {
+    status.style.color = '';
     status.textContent = `Last scan: ${data.last_scan} | ${items.length} stocks`;
+  } else if (data.market_open) {
+    status.textContent = 'Market open — first scan starting…';
   } else {
-    status.textContent = data.trading_hours
-      ? 'Waiting for first scan…'
-      : 'Market closed — last scan shown';
+    status.textContent = 'Market closed (opens 9:15 AM IST Mon–Fri)';
   }
 
   const tbody = document.getElementById('screener-body');
   if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--dim);text-align:center;padding:30px">
-      ${data.trading_hours
-        ? 'Scanning in progress…'
-        : 'Market closed. Opens 9:15 AM IST (Mon–Fri).'}
-    </td></tr>`;
+    const msg = data.scan_status === 'scanning'
+      ? `First scan in progress (scanning 50 stocks, ~20s)…`
+      : data.market_open
+        ? 'Waiting for scan results…'
+        : 'Market closed. Opens 9:15 AM IST (Mon–Fri).';
+    tbody.innerHTML = `<tr><td colspan="10" style="color:var(--dim);text-align:center;padding:30px">${msg}</td></tr>`;
     return;
   }
 
