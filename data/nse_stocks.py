@@ -35,10 +35,10 @@ _UNIVERSE = [
     ("BPCL","BPCL"),("COALINDIA","Coal India"),("ADANIPORTS","Adani Ports"),
     ("HINDALCO","Hindalco"),("TATACONSUM","Tata Consumer"),("BRITANNIA","Britannia"),
     ("SBILIFE","SBI Life"),("HEROMOTOCO","Hero MotoCorp"),("SHREECEM","Shree Cement"),
-    ("UPL","UPL"),("BAJAJ-AUTO","Bajaj Auto"),
+    ("UPL","UPL"),("BAJAJFINSV","Bajaj Finserv"),
     # Nifty Next 50
     ("PIDILITIND","Pidilite Industries"),("HAVELLS","Havells India"),("DMART","DMart"),
-    ("SIEMENS","Siemens"),("AMBUJACEM","Ambuja Cements"),("ACCCEMENT","ACC"),
+    ("SIEMENS","Siemens"),("AMBUJACEM","Ambuja Cements"),("ACC","ACC"),
     ("BERGEPAINT","Berger Paints"),("COLPAL","Colgate-Palmolive"),("DABUR","Dabur India"),
     ("GODREJCP","Godrej Consumer"),("MARICO","Marico"),("MUTHOOTFIN","Muthoot Finance"),
     ("PGHH","P&G Hygiene"),("TORNTPHARM","Torrent Pharma"),("BIOCON","Biocon"),
@@ -46,9 +46,9 @@ _UNIVERSE = [
     ("IPCALAB","IPCA Laboratories"),("JUBLFOOD","Jubilant Foodworks"),
     ("TRENT","Trent"),("NYKAA","Nykaa"),("DELHIVERY","Delhivery"),
     ("PAYTM","Paytm"),("ZOMATO","Zomato"),("NAUKRI","Info Edge"),
-    ("INDHOTEL","Indian Hotels"),("LTIM","LTIMindtree"),("MPHASIS","Mphasis"),
+    ("INDHOTEL","Indian Hotels"),("LTIMINDTREE","LTIMindtree"),("MPHASIS","Mphasis"),
     ("PERSISTENT","Persistent Systems"),("COFORGE","Coforge"),("KPITTECH","KPIT Tech"),
-    ("TATAELXSI","Tata Elxsi"),("OFSS","Oracle Financial"),("HEXAWARE","Hexaware"),
+    ("TATAELXSI","Tata Elxsi"),("OFSS","Oracle Financial"),
     # Banking & Finance
     ("BANKBARODA","Bank of Baroda"),("PNB","Punjab National Bank"),("CANBK","Canara Bank"),
     ("FEDERALBNK","Federal Bank"),("IDFCFIRSTB","IDFC First Bank"),("BANDHANBNK","Bandhan Bank"),
@@ -58,31 +58,29 @@ _UNIVERSE = [
     # Auto
     ("TVSMOTOR","TVS Motor"),("ASHOKLEY","Ashok Leyland"),("ESCORTS","Escorts"),
     ("MOTHERSON","Motherson Sumi"),("BOSCHLTD","Bosch"),("BALKRISIND","Balkrishna Ind"),
-    ("EXIDEIND","Exide Industries"),("AMARAJABAT","Amara Raja"),
+    ("EXIDEIND","Exide Industries"),("AMARARAJA","Amara Raja"),
     # Energy & Infra
-    ("ADANIGREEN","Adani Green"),("ADANITRANS","Adani Transmission"),("ADANIPOWER","Adani Power"),
+    ("ADANIGREEN","Adani Green"),("ADANIENSOL","Adani Energy Solutions"),("ADANIPOWER","Adani Power"),
     ("TATAPOWER","Tata Power"),("TORNTPOWER","Torrent Power"),("CESC","CESC"),
     ("NHPC","NHPC"),("SJVN","SJVN"),("IRCON","IRCON"),("NBCC","NBCC"),
     ("DLF","DLF"),("GODREJPROP","Godrej Properties"),("OBEROIRLTY","Oberoi Realty"),
     ("PRESTIGE","Prestige Estates"),("PHOENIXLTD","Phoenix Mills"),
     # IT
-    ("LTTS","L&T Technology"),("NIITTECH","NIIT Tech"),("ZENSAR","Zensar Tech"),
-    ("RAMSARUP","Ramsarup Ind"),("MASTEK","Mastek"),
+    ("LTTS","L&T Technology"),("ZENSARTECH","Zensar Tech"),("MASTEK","Mastek"),
     # Pharma
     ("ABBOTINDIA","Abbott India"),("PFIZER","Pfizer"),("GLAXO","GSK Pharma"),
     ("SANOFI","Sanofi India"),("NATCOPHARM","Natco Pharma"),("GRANULES","Granules India"),
-    ("AJANTPHARM","Ajanta Pharma"),("LAURUSLABS","Laurus Labs"),("DIVIS","Divi's"),
+    ("AJANTPHARM","Ajanta Pharma"),("LAURUSLABS","Laurus Labs"),
     # FMCG & Retail
     ("EMAMILTD","Emami"),("JYOTHYLAB","Jyothy Labs"),("RADICO","Radico Khaitan"),
-    ("UNITDSPR","United Spirits"),("MCDOWELL-N","McDowell's"),("VBL","Varun Beverages"),
+    ("UNITDSPR","United Spirits"),("VBL","Varun Beverages"),
     ("TATACOMM","Tata Communications"),
     # Metals
     ("SAIL","Steel Authority"),("NMDC","NMDC"),("HINDCOPPER","Hindustan Copper"),
     ("NATIONALUM","National Aluminium"),("WELCORP","Welspun Corp"),
     ("RATNAMANI","Ratnamani Metals"),
     # Chemicals
-    ("PIDILITIND","Pidilite"),("SRF","SRF"),("AAPL","Asian Paints"),
-    ("DEEPAKNI","Deepak Nitrite"),("CLEAN","Clean Science"),("NAVINFLUOR","Navin Fluorine"),
+    ("SRF","SRF"),("DEEPAKNITRITE","Deepak Nitrite"),("CLEAN","Clean Science"),("NAVINFLUOR","Navin Fluorine"),
     ("FLUOROCHEM","Gujarat Fluorochemicals"),
     # Cement
     ("JKCEMENT","JK Cement"),("RAMCOCEM","Ramco Cements"),("HEIDELBERG","HeidelbergCement"),
